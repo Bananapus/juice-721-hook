@@ -1,59 +1,57 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
-import "forge-std/Test.sol";
-import "../utils/ForTest_JBTiered721Delegate.sol";
+import "lib/forge-std/src/Test.sol";
+import "../utils/ForTest_JB721TiersHook.sol";
 
-import "../../JBTiered721DelegateDeployer.sol";
-import "../../JBTiered721Delegate.sol";
-import "../../JBTiered721DelegateStore.sol";
+import "src/JB721TiersHookDeployer.sol";
+import "src/JB721TiersHook.sol";
+import "src/JB721TiersHookStore.sol";
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBFundingCycleMetadataResolver.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/structs/JBTokenAmount.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/structs/JBDidRedeemData3_1_1.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/structs/JBDidPayData3_1_1.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/structs/JBDidRedeemData3_1_1.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/structs/JBRedemptionDelegateAllocation3_1_1.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBPaymentTerminal.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBFundingCycleBallot.sol";
+import "lib/juice-contracts-v4/src/libraries/JBRulesetMetadataResolver.sol";
+import "lib/juice-contracts-v4/src/structs/JBTokenAmount.sol";
+import "lib/juice-contracts-v4/src/structs/JBAfterRedeemRecordedContext.sol";
+import "lib/juice-contracts-v4/src/structs/JBAfterPayRecordedContext.sol";
+import "lib/juice-contracts-v4/src/structs/JBAfterRedeemRecordedContext.sol";
+import "lib/juice-contracts-v4/src/structs/JBRedeemHookSpecification.sol";
+import "lib/juice-contracts-v4/src/interfaces/terminal/IJBTerminal.sol";
+import "lib/juice-contracts-v4/src/interfaces/IJBRulesetApprovalHook.sol";
 
-import "../../structs/JBLaunchProjectData.sol";
+import "src/structs/JBLaunchProjectConfig.sol";
+import "src/structs/JBPayDataHookRulesetMetadata.sol";
 
+import "lib/juice-address-registry/src/JBAddressRegistry.sol";
 
-import "@jbx-protocol/juice-delegates-registry/src/JBDelegatesRegistry.sol";
+import "lib/juice-contracts-v4/src/libraries/JBCurrencyIds.sol";
+import "lib/juice-contracts-v4/src/libraries/JBConstants.sol";
 
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBCurrencies.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBConstants.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBTokens.sol";
-
-bytes4 constant PAY_DELEGATE_ID = bytes4(hex"70");
-bytes4 constant REDEEM_DELEGATE_ID = bytes4(hex"71");
-
+// TODO: Find new name for _tiers return variables
 contract UnitTestSetup is Test {
     address beneficiary;
     address owner;
     address reserveBeneficiary;
     address mockJBController;
     address mockJBDirectory;
-    address mockJBFundingCycleStore;
+    address mockJBRulesets;
     address mockTokenUriResolver;
     address mockTerminalAddress;
     address mockJBProjects;
-    address mockJBOperatorStore;
-    
+    address mockJBPermissions;
+
     string name = "NAME";
     string symbol = "SYM";
     string baseUri = "http://www.null.com/";
     string contractUri = "ipfs://null";
-    string fcMemo = "meemoo";
+    string rulesetMemo = "meemoo";
 
     uint256 projectId = 69;
 
-    uint256 constant OVERFLOW = 10e18;
+    uint256 constant SURPLUS = 10e18;
+    // What's going on here? Shouldn't this be 4_000?
     uint256 constant REDEMPTION_RATE = JBConstants.MAX_RESERVED_RATE; // 40%
 
-    JB721TierParams defaultTierParams;
+    JB721TierConfig defaultTierConfig;
 
     // NodeJS: function con(hash) { Buffer.from(bs58.decode(hash).slice(2)).toString('hex') }
     // JS;  0x${bs58.decode(hash).slice(2).toString('hex')})
@@ -69,8 +67,8 @@ contract UnitTestSetup is Test {
         bytes32(0xae7035a8ef12433adbf4a55f2063696972bcf50434fe70ee6d8ab78f74adbbf7),
         bytes32(0xae7035a8ef12433adbf4a55f2063696972bcf51c38098273db23452d955758c8)
     ];
-    
-    string[] theoricHashes = [
+
+    string[] theoreticHashes = [
         "QmWmyoMoctfbAaiEs2G46gpeUmhqFRDW6KWo64y5r581Vz",
         "QmetHutWQPz3qfu5jhTi1bqbRZXt8zAJaqqxkiJoJCX9DN",
         "QmSodj3RSrXKPy3WRFSPz8HRDVyRdrBtjxBfoiWBgtGugN",
@@ -83,34 +81,32 @@ contract UnitTestSetup is Test {
         "Qma5atSTeoKJkcXe2R7gdmcvPvLJLkh2jd4cDZeM1wnFgK"
     ];
 
-    JB721TierParams[] tiers;
-    JBTiered721DelegateStore store;
-    JBTiered721Delegate delegate;
-    JBTiered721Delegate noGovernanceOrigin; // noGovernanceOrigin
-    JBDelegatesRegistry delegatesRegistry;
-    JBTiered721DelegateDeployer jbDelegateDeployer;
-    JBDelegateMetadataHelper metadataHelper;
+    JB721TierConfig[] tiers;
+    JB721TiersHookStore store;
+    JB721TiersHook hook;
+    JB721TiersHook noGovernanceOrigin; // noGovernanceOrigin
+    JBAddressRegistry addressRegistry;
+    JB721TiersHookDeployer jbHookDeployer;
+    MetadataResolverHelper metadataHelper;
 
-    address delegate_i = address(bytes20(keccak256("delegate_implementation")));
+    address hook_i = address(bytes20(keccak256("hook_implementation")));
 
     event Mint(
         uint256 indexed tokenId,
         uint256 indexed tierId,
         address indexed beneficiary,
-        uint256 totalAmountContributed,
+        uint256 totalAmountPaid,
         address caller
     );
-    event MintReservedToken(
-        uint256 indexed tokenId, uint256 indexed tierId, address indexed beneficiary, address caller
-    );
-    event AddTier(uint256 indexed tierId, JB721TierParams tier, address caller);
+    event MintReservedNft(uint256 indexed tokenId, uint256 indexed tierId, address indexed beneficiary, address caller);
+    event AddTier(uint256 indexed tierId, JB721TierConfig tier, address caller);
     event RemoveTier(uint256 indexed tierId, address caller);
     event CleanTiers(address indexed nft, address caller);
-    event AddCredits(
-        uint256 indexed changeAmount, uint256 indexed newTotalCredits, address indexed account, address caller
+    event AddPayCredits(
+        uint256 indexed amount, uint256 indexed newTotalCredits, address indexed account, address caller
     );
-    event UseCredits(
-        uint256 indexed changeAmount, uint256 indexed newTotalCredits, address indexed account, address caller
+    event UsePayCredits(
+        uint256 indexed amount, uint256 indexed newTotalCredits, address indexed account, address caller
     );
 
     function setUp() public virtual {
@@ -118,88 +114,82 @@ contract UnitTestSetup is Test {
         owner = makeAddr("owner");
         reserveBeneficiary = makeAddr("reserveBeneficiary");
         mockJBDirectory = makeAddr("mockJBDirectory");
-        mockJBFundingCycleStore = makeAddr("mockJBFundingCycleStore");
+        mockJBRulesets = makeAddr("mockJBRulesets");
         mockTerminalAddress = makeAddr("mockTerminalAddress");
         mockJBProjects = makeAddr("mockJBProjects");
-        mockJBOperatorStore = makeAddr("mockJBOperatorStore");
+        mockJBPermissions = makeAddr("mockJBPermissions");
         mockJBController = makeAddr("mockJBController");
         mockTokenUriResolver = address(0);
 
         vm.etch(mockJBDirectory, new bytes(0x69));
-        vm.etch(mockJBFundingCycleStore, new bytes(0x69));
+        vm.etch(mockJBRulesets, new bytes(0x69));
         vm.etch(mockTokenUriResolver, new bytes(0x69));
         vm.etch(mockTerminalAddress, new bytes(0x69));
         vm.etch(mockJBProjects, new bytes(0x69));
         vm.etch(mockJBController, new bytes(0x69));
 
-        defaultTierParams = JB721TierParams({
-                price: 0, // use defaut prices
-                initialQuantity: 0, // use default Qt
-                votingUnits: 0, // default voting units
-                reservedRate: uint16(10), // default rr
-                reservedTokenBeneficiary: reserveBeneficiary, // default beneficiary
-                encodedIPFSUri: bytes32(0), // default hashes array
-                category: type(uint24).max,
-                allowManualMint: false,
-                shouldUseReservedTokenBeneficiaryAsDefault: false,
-                transfersPausable: false,
-                useVotingUnits: true
-            });
+        defaultTierConfig = JB721TierConfig({
+            price: 0, // Use default price.
+            initialSupply: 0, // Use default supply.
+            votingUnits: 0, // Use default voting units.
+            reserveFrequency: uint16(10), // Use default reserve frequency.
+            reserveBeneficiary: reserveBeneficiary, // Use default beneficiary.
+            encodedIPFSUri: bytes32(0), // Use default hashes array.
+            category: type(uint24).max,
+            allowOwnerMint: false,
+            useReserveBeneficiaryAsDefault: false,
+            transfersPausable: false,
+            useVotingUnits: true
+        });
 
-        // Create 10 tiers, each with 100 tokens available to mint
+        // Create 10 tiers, each with 100 NFTs available to mint.
         for (uint256 i; i < 10; i++) {
             tiers.push(
-                JB721TierParams({
+                JB721TierConfig({
                     price: uint104((i + 1) * 10),
-                    initialQuantity: uint32(100),
+                    initialSupply: uint32(100),
                     votingUnits: uint16(0),
-                    reservedRate: uint16(0),
-                    reservedTokenBeneficiary: reserveBeneficiary,
+                    reserveFrequency: uint16(0),
+                    reserveBeneficiary: reserveBeneficiary,
                     encodedIPFSUri: tokenUris[i],
                     category: uint24(100),
-                    allowManualMint: false,
-                    shouldUseReservedTokenBeneficiaryAsDefault: false,
+                    allowOwnerMint: false,
+                    useReserveBeneficiaryAsDefault: false,
                     transfersPausable: false,
                     useVotingUnits: true
                 })
             );
         }
         vm.mockCall(
-            mockJBFundingCycleStore,
-            abi.encodeCall(IJBFundingCycleStore.currentOf, projectId),
+            mockJBRulesets,
+            abi.encodeCall(IJBRulesets.currentOf, projectId),
             abi.encode(
-                JBFundingCycle({
-                    number: 1,
-                    configuration: block.timestamp,
-                    basedOn: 0,
+                JBRuleset({
+                    cycleNumber: 1,
+                    id: block.timestamp,
+                    basedOnId: 0,
                     start: block.timestamp,
                     duration: 600,
                     weight: 10e18,
-                    discountRate: 0,
-                    ballot: IJBFundingCycleBallot(address(0)),
-                    metadata: JBFundingCycleMetadataResolver.packFundingCycleMetadata(
-                        JBFundingCycleMetadata({
-                            global: JBGlobalFundingCycleMetadata({
-                                allowSetTerminals: false,
-                                allowSetController: false,
-                                pauseTransfers: false
-                            }),
+                    decayRate: 0,
+                    approvalHook: IJBRulesetApprovalHook(address(0)),
+                    metadata: JBRulesetMetadataResolver.packRulesetMetadata(
+                        JBRulesetMetadata({
                             reservedRate: 5000, //50%
                             redemptionRate: 5000, //50%
-                            ballotRedemptionRate: 5000,
+                            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
                             pausePay: false,
-                            pauseDistributions: false,
-                            pauseRedeem: false,
-                            pauseBurn: false,
-                            allowMinting: true,
+                            pauseCreditTransfers: false,
+                            allowOwnerMinting: true,
                             allowTerminalMigration: false,
+                            allowSetTerminals: false,
                             allowControllerMigration: false,
+                            allowSetController: false,
                             holdFees: false,
-                            preferClaimedTokenOverride: false,
-                            useTotalOverflowForRedemptions: false,
-                            useDataSourceForPay: true,
-                            useDataSourceForRedeem: true,
-                            dataSource: address(0),
+                            useTotalSurplusForRedemptions: false,
+                            useDataHookForPay: true,
+                            useDataHookForRedeem: true,
+                            dataHook: address(0),
                             metadata: 0x00
                         })
                         )
@@ -207,72 +197,63 @@ contract UnitTestSetup is Test {
             )
         );
 
-        vm.mockCall(mockJBDirectory, abi.encodeWithSelector(IJBDirectory.projects.selector), abi.encode(mockJBProjects));
+        vm.mockCall(mockJBDirectory, abi.encodeWithSelector(IJBDirectory.PROJECTS.selector), abi.encode(mockJBProjects));
 
         vm.mockCall(
-            mockJBDirectory, abi.encodeWithSelector(IJBOperatable.operatorStore.selector), abi.encode(mockJBOperatorStore)
+            mockJBDirectory, abi.encodeWithSelector(IJBPermissioned.PERMISSIONS.selector), abi.encode(mockJBPermissions)
         );
 
-        noGovernanceOrigin = new JBTiered721Delegate(
-            IJBDirectory(mockJBDirectory), 
-            IJBOperatorStore(mockJBOperatorStore), 
-            PAY_DELEGATE_ID, 
-            REDEEM_DELEGATE_ID
-        );
+        noGovernanceOrigin = new JB721TiersHook(IJBDirectory(mockJBDirectory), IJBPermissions(mockJBPermissions));
 
-        JBTiered721GovernanceDelegate onchainGovernance = new JBTiered721GovernanceDelegate(
-            IJBDirectory(mockJBDirectory), 
-            IJBOperatorStore(mockJBOperatorStore), 
-            PAY_DELEGATE_ID, 
-            REDEEM_DELEGATE_ID
-        );
+        JBGoverned721TiersHook onchainGovernance =
+            new JBGoverned721TiersHook(IJBDirectory(mockJBDirectory), IJBPermissions(mockJBPermissions));
 
-        delegatesRegistry = new JBDelegatesRegistry(IJBDelegatesRegistry(address(0)));
+        addressRegistry = new JBAddressRegistry();
 
-        jbDelegateDeployer = new JBTiered721DelegateDeployer(
-            onchainGovernance,
-            noGovernanceOrigin,
-            delegatesRegistry
-        );
+        jbHookDeployer = new JB721TiersHookDeployer(onchainGovernance, noGovernanceOrigin, addressRegistry);
 
-        store = new JBTiered721DelegateStore();
+        store = new JB721TiersHookStore();
 
-        JBDeployTiered721DelegateData memory delegateData = JBDeployTiered721DelegateData(
+        JBDeploy721TiersHookConfig memory hookConfig = JBDeploy721TiersHookConfig(
             name,
             symbol,
-            IJBFundingCycleStore(mockJBFundingCycleStore),
+            IJBRulesets(mockJBRulesets),
             baseUri,
             IJB721TokenUriResolver(mockTokenUriResolver),
             contractUri,
-            JB721PricingParams({tiers: tiers, currency: 1, decimals: 18, prices: IJBPrices(address(0))}),
+            JB721InitTiersConfig({
+                tiers: tiers,
+                currency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+                decimals: 18,
+                prices: IJBPrices(address(0))
+            }),
             address(0),
             store,
-            JBTiered721Flags({
+            JB721TiersHookFlags({
                 preventOverspending: false,
-                lockReservedTokenChanges: true,
-                lockVotingUnitChanges: true,
-                lockManualMintingChanges: true
+                noNewTiersWithReserves: true,
+                noNewTiersWithVotes: true,
+                noNewTiersWithOwnerMinting: true
             }),
             JB721GovernanceType.NONE
         );
 
-        delegate = JBTiered721Delegate(address(jbDelegateDeployer.deployDelegateFor(projectId, delegateData)));
-        delegate.transferOwnership(owner);
+        hook = JB721TiersHook(address(jbHookDeployer.deployHookFor(projectId, hookConfig)));
+        hook.transferOwnership(owner);
 
-        metadataHelper = new JBDelegateMetadataHelper();
-
+        metadataHelper = new MetadataResolverHelper();
     }
 
-    function ETH() internal pure returns (uint256) {
-        return JBCurrencies.ETH;
+    function NATIVE() internal pure returns (uint256) {
+        return JBCurrencyIds.NATIVE;
     }
 
     function USD() internal pure returns (uint256) {
-        return JBCurrencies.USD;
+        return JBCurrencyIds.USD;
     }
 
-    function ETHToken() internal pure returns (address) {
-        return JBTokens.ETH;
+    function NATIVE_TOKEN() internal pure returns (address) {
+        return JBConstants.NATIVE_TOKEN;
     }
 
     function MAX_FEE() internal pure returns (uint256) {
@@ -287,8 +268,8 @@ contract UnitTestSetup is Test {
         return JBConstants.MAX_REDEMPTION_RATE;
     }
 
-    function MAX_DISCOUNT_RATE() internal pure returns (uint256) {
-        return JBConstants.MAX_DISCOUNT_RATE;
+    function MAX_DECAY_RATE() internal pure returns (uint256) {
+        return JBConstants.MAX_DECAY_RATE;
     }
 
     function SPLITS_TOTAL_PERCENT() internal pure returns (uint256) {
@@ -307,60 +288,60 @@ contract UnitTestSetup is Test {
     function assertEq(JB721Tier memory first, JB721Tier memory second) internal {
         assertEq(first.id, second.id);
         assertEq(first.price, second.price);
-        assertEq(first.remainingQuantity, second.remainingQuantity);
-        assertEq(first.initialQuantity, second.initialQuantity);
+        assertEq(first.remainingSupply, second.remainingSupply);
+        assertEq(first.initialSupply, second.initialSupply);
         assertEq(first.votingUnits, second.votingUnits);
-        assertEq(first.reservedRate, second.reservedRate);
-        assertEq(first.reservedTokenBeneficiary, second.reservedTokenBeneficiary);
+        assertEq(first.reserveFrequency, second.reserveFrequency);
+        assertEq(first.reserveBeneficiary, second.reserveBeneficiary);
         assertEq(first.encodedIPFSUri, second.encodedIPFSUri);
     }
-    // JB721Tier Array comparison
 
+    // JB721Tier Array comparison
     function assertEq(JB721Tier[] memory first, JB721Tier[] memory second) internal {
         assertEq(first.length, second.length);
         for (uint256 i; i < first.length; i++) {
             assertEq(first[i].id, second[i].id);
             assertEq(first[i].price, second[i].price);
-            assertEq(first[i].remainingQuantity, second[i].remainingQuantity);
-            assertEq(first[i].initialQuantity, second[i].initialQuantity);
+            assertEq(first[i].remainingSupply, second[i].remainingSupply);
+            assertEq(first[i].initialSupply, second[i].initialSupply);
             assertEq(first[i].votingUnits, second[i].votingUnits);
-            assertEq(first[i].reservedRate, second[i].reservedRate);
-            assertEq(first[i].reservedTokenBeneficiary, second[i].reservedTokenBeneficiary);
+            assertEq(first[i].reserveFrequency, second[i].reserveFrequency);
+            assertEq(first[i].reserveBeneficiary, second[i].reserveBeneficiary);
             assertEq(first[i].encodedIPFSUri, second[i].encodedIPFSUri);
         }
     }
 
-    function mockAndExpect(address _target, bytes memory _calldata, bytes memory _returnData) internal {
-        vm.mockCall(_target, _calldata, _returnData);
-        vm.expectCall(_target, _calldata);
+    function mockAndExpect(address target, bytes memory _calldata, bytes memory returnData) internal {
+        vm.mockCall(target, _calldata, returnData);
+        vm.expectCall(target, _calldata);
     }
 
-    // Generate tokenId's based on token number and tier
-    function _generateTokenId(uint256 _tierId, uint256 _tokenNumber) internal pure returns (uint256) {
-        return (_tierId * 1_000_000_000) + _tokenNumber;
+    // Generate `tokenId`s based on token number and tier
+    function _generateTokenId(uint256 tierId, uint256 tokenNumber) internal pure returns (uint256) {
+        return (tierId * 1_000_000_000) + tokenNumber;
     }
-    // Check if every elements from smol are in bigg
 
+    // Check if every elements from smol is in bigg.
     function _isIn(JB721Tier[] memory smol, JB721Tier[] memory bigg) internal returns (bool) {
-        // Cannot be oversized
+        // smol cannot be bigger than bigg.
         if (smol.length > bigg.length) {
             emit log("_isIn: smol too big");
             return false;
         }
         if (smol.length == 0) return true;
         uint256 count;
-        // Iterate on every smol elements
+        // Iterate on every smol element.
         for (uint256 smolIter; smolIter < smol.length; smolIter++) {
             // Compare it with every bigg element until...
             for (uint256 biggIter; biggIter < bigg.length; biggIter++) {
-                // ... the same element is found -> break to go to the next smol element
+                // ... the same element is found, then break to go to the next smol element.
                 if (_compareTiers(smol[smolIter], bigg[biggIter])) {
-                    count += smolIter + 1; // 1-indexed, as the length
+                    count += smolIter + 1; // 1-indexed, as the length.
                     break;
                 }
             }
         }
-        // Insure all the smoll indexes have been iterated on (ie we've seen (smoll.length)! elements)
+        // Ensure that all the smol indexes have been iterated on (i.e. we've seen (smol.length)! elements).
         if (count == (smol.length * (smol.length + 1)) / 2) {
             return true;
         } else {
@@ -376,347 +357,405 @@ contract UnitTestSetup is Test {
         // if(first.id != second.id) emit log_string("compareTiers:id");
 
         // if(first.price != second.price) emit log_string("compareTiers:price");
-        
-        // if(first.remainingQuantity != second.remainingQuantity) emit log_string("compareTiers:remainingQuantity");
-        
-        // if(first.initialQuantity != second.initialQuantity) emit log_string("compareTiers:initialQuantity");
-        
+
+        // if(first.remainingSupply != second.remainingSupply) emit log_string("compareTiers:remainingSupply");
+
+        // if(first.initialSupply != second.initialSupply) emit log_string("compareTiers:initialSupply");
+
         // if(first.votingUnits != second.votingUnits) {
         //     emit log("compareTiers:votingUnits");
         //     emit log_uint(first.votingUnits);
         //     emit log_uint(second.votingUnits);
         // }
-        
-        // if(first.reservedRate != second.reservedRate) emit log_string("compareTiers:reservedRate");
-        
-        // if(first.reservedTokenBeneficiary != second.reservedTokenBeneficiary) emit log_string("compareTiers:reservedTokenBeneficiary");
-        
+
+        // if(first.reserveFrequency != second.reserveFrequency) emit log_string("compareTiers:reserveFrequency");
+
+        // if(first.reserveBeneficiary != second.reserveBeneficiary) emit
+        // log_string("compareTiers:reserveBeneficiary");
+
         // if(first.encodedIPFSUri != second.encodedIPFSUri) {
         //     emit log_string("compareTiers:encodedIPFSUri");
         //     emit log_bytes32(first.encodedIPFSUri);
         //     emit log_bytes32(second.encodedIPFSUri);
         // }
-        
-        // if(keccak256(abi.encodePacked(first.resolvedUri)) != keccak256(abi.encodePacked(second.resolvedUri))) emit log_string("compareTiers:uri");
-        
+
+        // if(keccak256(abi.encodePacked(first.resolvedUri)) != keccak256(abi.encodePacked(second.resolvedUri))) emit
+        // log_string("compareTiers:uri");
+
         return (
-            first.id == second.id && first.price == second.price && first.remainingQuantity == second.remainingQuantity
-                && first.initialQuantity == second.initialQuantity && first.votingUnits == second.votingUnits
-                && first.reservedRate == second.reservedRate
-                && first.reservedTokenBeneficiary == second.reservedTokenBeneficiary
-                && first.encodedIPFSUri == second.encodedIPFSUri
+            first.id == second.id && first.price == second.price && first.remainingSupply == second.remainingSupply
+                && first.initialSupply == second.initialSupply && first.votingUnits == second.votingUnits
+                && first.reserveFrequency == second.reserveFrequency
+                && first.reserveBeneficiary == second.reserveBeneficiary && first.encodedIPFSUri == second.encodedIPFSUri
                 && keccak256(abi.encodePacked(first.resolvedUri)) == keccak256(abi.encodePacked(second.resolvedUri))
         );
     }
 
-    function _sortArray(uint256[] memory _in) internal pure returns (uint256[] memory) {
-        for (uint256 i; i < _in.length; i++) {
+    function _sortArray(uint256[] memory arr) internal pure returns (uint256[] memory) {
+        for (uint256 i; i < arr.length; i++) {
             uint256 minIndex = i;
-            uint256 minValue = _in[i];
-            for (uint256 j = i; j < _in.length; j++) {
-                if (_in[j] < minValue) {
+            uint256 minValue = arr[i];
+            for (uint256 j = i; j < arr.length; j++) {
+                if (arr[j] < minValue) {
                     minIndex = j;
-                    minValue = _in[j];
+                    minValue = arr[j];
                 }
             }
-            if (minIndex != i) (_in[i], _in[minIndex]) = (_in[minIndex], _in[i]);
+            if (minIndex != i) (arr[i], arr[minIndex]) = (arr[minIndex], arr[i]);
         }
-        return _in;
+        return arr;
     }
 
-    function _sortArray(uint16[] memory _in) internal pure returns (uint16[] memory) {
-        for (uint256 i; i < _in.length; i++) {
+    function _sortArray(uint16[] memory arr) internal pure returns (uint16[] memory) {
+        for (uint256 i; i < arr.length; i++) {
             uint256 minIndex = i;
-            uint16 minValue = _in[i];
-            for (uint256 j = i; j < _in.length; j++) {
-                if (_in[j] < minValue) {
+            uint16 minValue = arr[i];
+            for (uint256 j = i; j < arr.length; j++) {
+                if (arr[j] < minValue) {
                     minIndex = j;
-                    minValue = _in[j];
+                    minValue = arr[j];
                 }
             }
-            if (minIndex != i) (_in[i], _in[minIndex]) = (_in[minIndex], _in[i]);
+            if (minIndex != i) (arr[i], arr[minIndex]) = (arr[minIndex], arr[i]);
         }
-        return _in;
+        return arr;
     }
 
-    function _sortArray(uint8[] memory _in) internal pure returns (uint8[] memory) {
-        for (uint256 i; i < _in.length; i++) {
+    function _sortArray(uint8[] memory arr) internal pure returns (uint8[] memory) {
+        for (uint256 i; i < arr.length; i++) {
             uint256 minIndex = i;
-            uint8 minValue = _in[i];
-            for (uint256 j = i; j < _in.length; j++) {
-                if (_in[j] < minValue) {
+            uint8 minValue = arr[i];
+            for (uint256 j = i; j < arr.length; j++) {
+                if (arr[j] < minValue) {
                     minIndex = j;
-                    minValue = _in[j];
+                    minValue = arr[j];
                 }
             }
-            if (minIndex != i) (_in[i], _in[minIndex]) = (_in[minIndex], _in[i]);
+            if (minIndex != i) (arr[i], arr[minIndex]) = (arr[minIndex], arr[i]);
         }
-        return _in;
+        return arr;
     }
 
-    function _createArray(uint256 _length, uint256 _seed) internal pure returns(uint16[] memory) {
-        uint16[] memory _out = new uint16[](_length);
+    function _createArray(uint256 length, uint256 seed) internal pure returns (uint16[] memory) {
+        uint16[] memory out = new uint16[](length);
 
-        for(uint256 i; i < _length; i++) {
-            _out[i] = uint16(uint256(keccak256(abi.encode(_seed, i))));
+        for (uint256 i; i < length; i++) {
+            out[i] = uint16(uint256(keccak256(abi.encode(seed, i))));
         }
 
-        return _out;
+        return out;
     }
 
-    function _createTiers(JB721TierParams memory _tierParams, uint256 _numberOfTiers) internal view returns(JB721TierParams[] memory _tiersParams, JB721Tier[] memory _tiers) {
-        return _createTiers(_tierParams, _numberOfTiers, 0, new uint16[](_numberOfTiers), 0);
+    function _createTiers(
+        JB721TierConfig memory tierParams,
+        uint256 numberOfTiers
+    )
+        internal
+        view
+        returns (JB721TierConfig[] memory tierConfigs, JB721Tier[] memory _tiers)
+    {
+        return _createTiers(tierParams, numberOfTiers, 0, new uint16[](numberOfTiers), 0);
     }
 
-    function _createTiers(JB721TierParams memory _tierParams, uint256 _numberOfTiers, uint256 _categoryIncrement) internal view returns(JB721TierParams[] memory _tiersParams, JB721Tier[] memory _tiers) {
-        return _createTiers(_tierParams, _numberOfTiers, 0, new uint16[](_numberOfTiers), _categoryIncrement);
+    function _createTiers(
+        JB721TierConfig memory tierParams,
+        uint256 numberOfTiers,
+        uint256 categoryIncrement
+    )
+        internal
+        view
+        returns (JB721TierConfig[] memory tierConfigs, JB721Tier[] memory _tiers)
+    {
+        return _createTiers(tierParams, numberOfTiers, 0, new uint16[](numberOfTiers), categoryIncrement);
     }
 
-    function _createTiers(JB721TierParams memory _tierParams, uint256 _numberOfTiers, uint256 _initialId, uint16[] memory _floors) internal view returns(JB721TierParams[] memory _tiersParams, JB721Tier[] memory _tiers) {
-        return _createTiers(_tierParams, _numberOfTiers, _initialId, _floors, 0);
+    function _createTiers(
+        JB721TierConfig memory tierParams,
+        uint256 numberOfTiers,
+        uint256 initialId,
+        uint16[] memory floors
+    )
+        internal
+        view
+        returns (JB721TierConfig[] memory tierConfigs, JB721Tier[] memory _tiers)
+    {
+        return _createTiers(tierParams, numberOfTiers, initialId, floors, 0);
     }
 
-    function _createTiers(JB721TierParams memory _tierParams, uint256 _numberOfTiers, uint256 _initialId, uint16[] memory _floors, uint256 _categoryIncrement) internal view returns(JB721TierParams[] memory _tiersParams, JB721Tier[] memory _tiers) {
-            _tiersParams = new JB721TierParams[](_numberOfTiers);
-            _tiers = new JB721Tier[](_numberOfTiers);
+    function _createTiers(
+        JB721TierConfig memory tierConfig,
+        uint256 numberOfTiers,
+        uint256 initialId,
+        uint16[] memory floors,
+        uint256 categoryIncrement
+    )
+        internal
+        view
+        returns (JB721TierConfig[] memory tierConfigs, JB721Tier[] memory _tiers)
+    {
+        tierConfigs = new JB721TierConfig[](numberOfTiers);
+        _tiers = new JB721Tier[](numberOfTiers);
 
-            for (uint256 i; i < _numberOfTiers; i++) {
-                _tiersParams[i] = JB721TierParams({
-                    price: _floors[i] == 0 ? uint16((i + 1) * 10) : _floors[i],
-                    initialQuantity: _tierParams.initialQuantity == 0 ? uint32(100) : _tierParams.initialQuantity,
-                    votingUnits: _tierParams.votingUnits,
-                    reservedRate: _tierParams.reservedRate,
-                    reservedTokenBeneficiary: reserveBeneficiary,
-                    encodedIPFSUri: i < tokenUris.length ? tokenUris[i] : tokenUris[0],
-                    category: _categoryIncrement == 0
-                        ? _tierParams.category == type(uint24).max
-                            ? uint24(i*2+1)
-                            : _tierParams.category
-                        : uint24(i * 2 + _categoryIncrement),
-                    allowManualMint: _tierParams.allowManualMint,
-                    shouldUseReservedTokenBeneficiaryAsDefault: _tierParams.shouldUseReservedTokenBeneficiaryAsDefault,
-                    transfersPausable: _tierParams.transfersPausable,
-                    useVotingUnits: _tierParams.useVotingUnits
-                });
+        for (uint256 i; i < numberOfTiers; i++) {
+            tierConfigs[i] = JB721TierConfig({
+                price: floors[i] == 0 ? uint16((i + 1) * 10) : floors[i],
+                initialSupply: tierConfig.initialSupply == 0 ? uint32(100) : tierConfig.initialSupply,
+                votingUnits: tierConfig.votingUnits,
+                reserveFrequency: tierConfig.reserveFrequency,
+                reserveBeneficiary: reserveBeneficiary,
+                encodedIPFSUri: i < tokenUris.length ? tokenUris[i] : tokenUris[0],
+                category: categoryIncrement == 0
+                    ? tierConfig.category == type(uint24).max ? uint24(i * 2 + 1) : tierConfig.category
+                    : uint24(i * 2 + categoryIncrement),
+                allowOwnerMint: tierConfig.allowOwnerMint,
+                useReserveBeneficiaryAsDefault: tierConfig.useReserveBeneficiaryAsDefault,
+                transfersPausable: tierConfig.transfersPausable,
+                useVotingUnits: tierConfig.useVotingUnits
+            });
 
-                _tiers[i] = JB721Tier({
-                    id: _initialId + i + 1,
-                    price: _tiersParams[i].price,
-                    remainingQuantity: _tiersParams[i].initialQuantity,
-                    initialQuantity: _tiersParams[i].initialQuantity,
-                    votingUnits: _tiersParams[i].votingUnits,
-                    reservedRate: _tiersParams[i].reservedRate,
-                    reservedTokenBeneficiary: _tiersParams[i].reservedTokenBeneficiary,
-                    encodedIPFSUri: _tiersParams[i].encodedIPFSUri,
-                    category: _tiersParams[i].category,
-                    allowManualMint: _tiersParams[i].allowManualMint,
-                    transfersPausable: _tiersParams[i].transfersPausable,
-                    resolvedUri: defaultTierParams.encodedIPFSUri == bytes32(0)
-                        ? "" 
-                        : string(abi.encodePacked("resolverURI", _generateTokenId(_initialId + i + 1, 0)))
-                });
-            }
-    }
-    function _addDeleteTiers(JBTiered721Delegate _delegate, uint256 _currentNumberOfTiers, uint256 _numberOfTiersToRemove, JB721TierParams[] memory _tiersToAdd) internal returns (uint256) {
-            uint256 _newNumberOfTiers = _currentNumberOfTiers;
-            uint256[] memory tiersToRemove = new uint256[](_numberOfTiersToRemove);
-            
-            for(uint256 i; i < _numberOfTiersToRemove && _newNumberOfTiers != 0; i++) {
-                tiersToRemove[i] = _currentNumberOfTiers - i - 1;
-                _newNumberOfTiers--;
-
-            }
-
-            _newNumberOfTiers += _tiersToAdd.length;
-
-            vm.startPrank(owner);
-            _delegate.adjustTiers(_tiersToAdd, tiersToRemove);
-            _delegate.store().cleanTiers(address(_delegate));
-            vm.stopPrank();
-
-            JB721Tier[] memory _storedTiers = _delegate.store().tiersOf(
-                address(_delegate), new uint256[](0), false, 0, _newNumberOfTiers
-            );
-            assertEq(_storedTiers.length, _newNumberOfTiers);
-
-            return _newNumberOfTiers;
+            _tiers[i] = JB721Tier({
+                id: initialId + i + 1,
+                price: tierConfigs[i].price,
+                remainingSupply: tierConfigs[i].initialSupply,
+                initialSupply: tierConfigs[i].initialSupply,
+                votingUnits: tierConfigs[i].votingUnits,
+                reserveFrequency: tierConfigs[i].reserveFrequency,
+                reserveBeneficiary: tierConfigs[i].reserveBeneficiary,
+                encodedIPFSUri: tierConfigs[i].encodedIPFSUri,
+                category: tierConfigs[i].category,
+                allowOwnerMint: tierConfigs[i].allowOwnerMint,
+                transfersPausable: tierConfigs[i].transfersPausable,
+                resolvedUri: defaultTierConfig.encodedIPFSUri == bytes32(0)
+                    ? ""
+                    : string(abi.encodePacked("resolverURI", _generateTokenId(initialId + i + 1, 0)))
+            });
+        }
     }
 
-    function _initializeDelegateDefaultTiers(uint256 _initialNumberOfTiers) internal returns(JBTiered721Delegate){
-        return _initializeDelegateDefaultTiers(_initialNumberOfTiers, false, 1, 18, address(0));
+    function _addDeleteTiers(
+        JB721TiersHook tiersHook,
+        uint256 currentNumberOfTiers,
+        uint256 numberOfTiersToRemove,
+        JB721TierConfig[] memory tiersToAdd
+    )
+        internal
+        returns (uint256)
+    {
+        uint256 newNumberOfTiers = currentNumberOfTiers;
+        uint256[] memory tiersToRemove = new uint256[](numberOfTiersToRemove);
+
+        for (uint256 i; i < numberOfTiersToRemove && newNumberOfTiers != 0; i++) {
+            tiersToRemove[i] = currentNumberOfTiers - i - 1;
+            newNumberOfTiers--;
+        }
+
+        newNumberOfTiers += tiersToAdd.length;
+
+        vm.startPrank(owner);
+        tiersHook.adjustTiers(tiersToAdd, tiersToRemove);
+        tiersHook.STORE().cleanTiers(address(tiersHook));
+        vm.stopPrank();
+
+        JB721Tier[] memory storedTiers =
+            tiersHook.STORE().tiersOf(address(tiersHook), new uint256[](0), false, 0, newNumberOfTiers);
+        assertEq(storedTiers.length, newNumberOfTiers);
+
+        return newNumberOfTiers;
     }
 
-    function _initializeDelegateDefaultTiers(uint256 _initialNumberOfTiers, bool _preventOverspending) internal returns(JBTiered721Delegate){
-        return _initializeDelegateDefaultTiers(_initialNumberOfTiers, _preventOverspending, 1, 18, address(0));
+    function _initializeDelegateDefaultTiers(uint256 initialNumberOfTiers) internal returns (JB721TiersHook) {
+        return _initializeDelegateDefaultTiers(
+            initialNumberOfTiers, false, uint32(uint160(JBConstants.NATIVE_TOKEN)), 18, address(0)
+        );
     }
 
-    function _initializeDelegateDefaultTiers(uint256 _initialNumberOfTiers, bool _preventOverspending, uint48 _currency, uint48 _decimals, address _oracle) internal returns(JBTiered721Delegate _delegate){
+    function _initializeDelegateDefaultTiers(
+        uint256 initialNumberOfTiers,
+        bool preventOverspending
+    )
+        internal
+        returns (JB721TiersHook)
+    {
+        return _initializeDelegateDefaultTiers(
+            initialNumberOfTiers, preventOverspending, uint32(uint160(JBConstants.NATIVE_TOKEN)), 18, address(0)
+        );
+    }
+
+    function _initializeDelegateDefaultTiers(
+        uint256 initialNumberOfTiers,
+        bool preventOverspending,
+        uint48 currency,
+        uint48 decimals,
+        address oracle
+    )
+        internal
+        returns (JB721TiersHook tiersHook)
+    {
         // Initialize first tiers to add
-        (JB721TierParams[] memory _tiersParams,) = _createTiers(
-            defaultTierParams,
-            _initialNumberOfTiers);
+        (JB721TierConfig[] memory tiersParams,) = _createTiers(defaultTierConfig, initialNumberOfTiers);
 
-        // "Deploy" the delegate
-        vm.etch(delegate_i, address(delegate).code);
-        _delegate = JBTiered721Delegate(delegate_i);
+        // "Deploy" the hook
+        vm.etch(hook_i, address(hook).code);
+        tiersHook = JB721TiersHook(hook_i);
 
-        // Deploy the delegate store        
-        JBTiered721DelegateStore _store = new JBTiered721DelegateStore();
+        // Deploy the hook store
+        JB721TiersHookStore hookStore = new JB721TiersHookStore();
 
-        // Initialize the delegate, put the struc in memory for stack's sake
-        JBTiered721Flags memory _flags = JBTiered721Flags({
-            preventOverspending: _preventOverspending,
-            lockReservedTokenChanges: false,
-            lockVotingUnitChanges: false,
-            lockManualMintingChanges: false
+        // Initialize the hook, put the struc in memory for stack's sake
+        JB721TiersHookFlags memory flags = JB721TiersHookFlags({
+            preventOverspending: preventOverspending,
+            noNewTiersWithReserves: false,
+            noNewTiersWithVotes: false,
+            noNewTiersWithOwnerMinting: false
         });
 
-        JB721PricingParams memory _pricingParams = JB721PricingParams({
-            tiers: _tiersParams,
-            currency: _currency,
-            decimals: _decimals,
-            prices: IJBPrices(_oracle)
+        JB721InitTiersConfig memory pricingParams = JB721InitTiersConfig({
+            tiers: tiersParams,
+            currency: currency,
+            decimals: decimals,
+            prices: IJBPrices(oracle)
         });
 
-        _delegate.initialize(
+        tiersHook.initialize(
             projectId,
             name,
             symbol,
-            IJBFundingCycleStore(mockJBFundingCycleStore),
+            IJBRulesets(mockJBRulesets),
             baseUri,
             IJB721TokenUriResolver(mockTokenUriResolver),
             contractUri,
-            _pricingParams,
-            IJBTiered721DelegateStore(_store),
-            _flags
+            pricingParams,
+            IJB721TiersHookStore(hookStore),
+            flags
         );
 
         // Transfer ownership to owner
-        _delegate.transferOwnership(owner);
+        tiersHook.transferOwnership(owner);
     }
 
-    function _initializeForTestDelegate(uint256 _initialNumberOfTiers) internal returns(ForTest_JBTiered721Delegate _delegate){
+    function _initializeForTestHook(uint256 initialNumberOfTiers) internal returns (ForTest_JB721TiersHook tiersHook) {
         // Initialize first tiers to add
-        (JB721TierParams[] memory _tiersParams,) = _createTiers(
-            defaultTierParams,
-            _initialNumberOfTiers);
+        (JB721TierConfig[] memory tiersParams,) = _createTiers(defaultTierConfig, initialNumberOfTiers);
 
-        // Deploy the For Test delegate store        
-        ForTest_JBTiered721DelegateStore _store = new ForTest_JBTiered721DelegateStore();
+        // Deploy the For Test hook store
+        ForTest_JB721TiersHookStore hookStore = new ForTest_JB721TiersHookStore();
 
-        // Deploy the For Test delegate
-        _delegate = new ForTest_JBTiered721Delegate(
+        // Deploy the For Test hook
+        tiersHook = new ForTest_JB721TiersHook(
             projectId,
             IJBDirectory(mockJBDirectory),
             name,
             symbol,
-            IJBFundingCycleStore(mockJBFundingCycleStore),
+            IJBRulesets(mockJBRulesets),
             baseUri,
             IJB721TokenUriResolver(mockTokenUriResolver),
             contractUri,
-            _tiersParams,
-            IJBTiered721DelegateStore(address(_store)),
-            JBTiered721Flags({
+            tiersParams,
+            IJB721TiersHookStore(address(hookStore)),
+            JB721TiersHookFlags({
                 preventOverspending: false,
-                lockReservedTokenChanges: false,
-                lockVotingUnitChanges: false,
-                lockManualMintingChanges: true
+                noNewTiersWithReserves: false,
+                noNewTiersWithVotes: false,
+                noNewTiersWithOwnerMinting: true
             })
         );
 
         // Transfer ownership to owner
-        _delegate.transferOwnership(owner);
+        tiersHook.transferOwnership(owner);
     }
-
 
     function createData()
         internal
         view
         returns (
-            JBDeployTiered721DelegateData memory tiered721DeployerData,
-            JBLaunchProjectData memory launchProjectData
+            JBDeploy721TiersHookConfig memory tiered721DeployerData,
+            JBLaunchProjectConfig memory launchProjectConfig
         )
     {
-        JBProjectMetadata memory projectMetadata;
-        JBFundingCycleData memory data;
-        JBPayDataSourceFundingCycleMetadata memory metadata;
-        JBGroupedSplits[] memory groupedSplits;
-        JBFundAccessConstraints[] memory fundAccessConstraints;
-        IJBPaymentTerminal[] memory terminals;
-        JB721TierParams[] memory tierParams = new JB721TierParams[](10);
+        string memory projectMetadata;
+        JBPayDataHookRulesetConfig[] memory rulesetConfigurations;
+        JBTerminalConfig[] memory terminalConfigurations;
+        JBPayDataHookRulesetMetadata memory metadata;
+        JBFundAccessLimitGroup[] memory fundAccessLimitGroups;
+        JB721TierConfig[] memory tierParams = new JB721TierConfig[](10);
         for (uint256 i; i < 10; i++) {
-            tierParams[i] = JB721TierParams({
+            tierParams[i] = JB721TierConfig({
                 price: uint104((i + 1) * 10),
-                initialQuantity: uint32(100),
+                initialSupply: uint32(100),
                 votingUnits: uint16(0),
-                reservedRate: uint16(0),
-                reservedTokenBeneficiary: reserveBeneficiary,
+                reserveFrequency: uint16(0),
+                reserveBeneficiary: reserveBeneficiary,
                 encodedIPFSUri: tokenUris[i],
                 category: uint24(100),
-                allowManualMint: false,
-                shouldUseReservedTokenBeneficiaryAsDefault: false,
+                allowOwnerMint: false,
+                useReserveBeneficiaryAsDefault: false,
                 transfersPausable: false,
                 useVotingUnits: true
             });
         }
-        tiered721DeployerData = JBDeployTiered721DelegateData({
+        tiered721DeployerData = JBDeploy721TiersHookConfig({
             name: name,
             symbol: symbol,
-            fundingCycleStore: IJBFundingCycleStore(mockJBFundingCycleStore),
+            rulesets: IJBRulesets(mockJBRulesets),
             baseUri: baseUri,
             tokenUriResolver: IJB721TokenUriResolver(mockTokenUriResolver),
             contractUri: contractUri,
-            pricing: JB721PricingParams({tiers: tierParams, currency: 1, decimals: 18, prices: IJBPrices(address(0))}),
-            reservedTokenBeneficiary: reserveBeneficiary,
+            tiersConfig: JB721InitTiersConfig({
+                tiers: tierParams,
+                currency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+                decimals: 18,
+                prices: IJBPrices(address(0))
+            }),
+            reserveBeneficiary: reserveBeneficiary,
             store: store,
-            flags: JBTiered721Flags({
+            flags: JB721TiersHookFlags({
                 preventOverspending: false,
-                lockReservedTokenChanges: true,
-                lockVotingUnitChanges: true,
-                lockManualMintingChanges: true
+                noNewTiersWithReserves: true,
+                noNewTiersWithVotes: true,
+                noNewTiersWithOwnerMinting: true
             }),
             governanceType: JB721GovernanceType.NONE
         });
 
+        projectMetadata = "myIPFSHash";
 
-        projectMetadata = JBProjectMetadata({content: "myIPFSHash", domain: 1});
-        data = JBFundingCycleData({
-            duration: 14,
-            weight: 10 ** 18,
-            discountRate: 450_000_000,
-            ballot: IJBFundingCycleBallot(address(0))
-        });
-        metadata = JBPayDataSourceFundingCycleMetadata({
-            global: JBGlobalFundingCycleMetadata({
-                allowSetTerminals: false,
-                allowSetController: false,
-                pauseTransfers: false
-            }),
+        metadata = JBPayDataHookRulesetMetadata({
             reservedRate: 5000, //50%
             redemptionRate: 5000, //50%
-            ballotRedemptionRate: 0,
+            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
             pausePay: false,
-            pauseDistributions: false,
-            pauseRedeem: false,
-            pauseBurn: false,
-            allowMinting: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: false,
             allowTerminalMigration: false,
+            allowSetTerminals: false,
             allowControllerMigration: false,
+            allowSetController: false,
             holdFees: false,
-            preferClaimedTokenOverride: false,
-            useTotalOverflowForRedemptions: false,
-            useDataSourceForRedeem: false,
+            useTotalSurplusForRedemptions: false,
+            useDataHookForRedeem: false,
             metadata: 0x00
         });
-        launchProjectData = JBLaunchProjectData({
+
+        rulesetConfigurations = new JBPayDataHookRulesetConfig[](1);
+        rulesetConfigurations[0].mustStartAtOrAfter = 0;
+        rulesetConfigurations[0].duration = 14;
+        rulesetConfigurations[0].weight = 10 ** 18;
+        rulesetConfigurations[0].decayRate = 450_000_000;
+        rulesetConfigurations[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        rulesetConfigurations[0].metadata = metadata;
+        rulesetConfigurations[0].fundAccessLimitGroups = fundAccessLimitGroups;
+
+        terminalConfigurations = new JBTerminalConfig[](1);
+        address[] memory tokensToAccept = new address[](1);
+        tokensToAccept[0] = JBConstants.NATIVE_TOKEN;
+        terminalConfigurations[0] =
+            JBTerminalConfig({terminal: IJBTerminal(mockTerminalAddress), tokensToAccept: tokensToAccept});
+
+        launchProjectConfig = JBLaunchProjectConfig({
             projectMetadata: projectMetadata,
-            data: data,
-            metadata: metadata,
-            mustStartAtOrAfter: 0,
-            groupedSplits: groupedSplits,
-            fundAccessConstraints: fundAccessConstraints,
-            terminals: terminals,
-            memo: fcMemo
+            rulesetConfigurations: rulesetConfigurations,
+            terminalConfigurations: terminalConfigurations,
+            memo: rulesetMemo
         });
     }
 }

@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBCurrencies.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBConstants.sol";
-import "@jbx-protocol/juice-contracts-v3/contracts/libraries/JBTokens.sol";
+import "lib/juice-contracts-v4/src/libraries/JBCurrencyIds.sol";
+import "lib/juice-contracts-v4/src/libraries/JBConstants.sol";
 
 contract AccessJBLib {
-    function ETH() external pure returns (uint256) {
-        return JBCurrencies.ETH;
+    function NATIVE() external pure returns (uint256) {
+        return uint32(uint160(JBConstants.NATIVE_TOKEN));
     }
 
     function USD() external pure returns (uint256) {
-        return JBCurrencies.USD;
+        return JBCurrencyIds.USD;
     }
 
-    function ETHToken() external pure returns (address) {
-        return JBTokens.ETH;
+    function NATIVE_TOKEN() external pure returns (address) {
+        return JBConstants.NATIVE_TOKEN;
     }
 
     function MAX_FEE() external pure returns (uint256) {
@@ -30,8 +29,8 @@ contract AccessJBLib {
         return JBConstants.MAX_REDEMPTION_RATE;
     }
 
-    function MAX_DISCOUNT_RATE() external pure returns (uint256) {
-        return JBConstants.MAX_DISCOUNT_RATE;
+    function MAX_DECAY_RATE() external pure returns (uint256) {
+        return JBConstants.MAX_DECAY_RATE;
     }
 
     function SPLITS_TOTAL_PERCENT() external pure returns (uint256) {

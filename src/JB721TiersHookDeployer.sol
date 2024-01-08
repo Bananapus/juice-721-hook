@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
-import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
-import { IJBDelegatesRegistry } from "@jbx-protocol/juice-delegates-registry/src/interfaces/IJBDelegatesRegistry.sol";
-import { IJBDirectory } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBDirectory.sol";
-import { JBOwnable } from "@jbx-protocol/juice-ownable/src/JBOwnable.sol";
+import {Clones} from "lib/openzeppelin-contracts/contracts/proxy/Clones.sol";
+import {IJBAddressRegistry} from "lib/juice-address-registry/src/interfaces/IJBAddressRegistry.sol";
+import {IJBDirectory} from "lib/juice-contracts-v4/src/interfaces/IJBDirectory.sol";
+import {JBOwnable} from "lib/juice-ownable/src/JBOwnable.sol";
 
-import { JB721GovernanceType } from "./enums/JB721GovernanceType.sol";
-import { IJBTiered721DelegateDeployer } from "./interfaces/IJBTiered721DelegateDeployer.sol";
-import { IJBTiered721Delegate } from "./interfaces/IJBTiered721Delegate.sol";
-import { JBDeployTiered721DelegateData } from "./structs/JBDeployTiered721DelegateData.sol";
-import { JBTiered721Delegate } from "./JBTiered721Delegate.sol";
-import { JBTiered721GovernanceDelegate } from "./JBTiered721GovernanceDelegate.sol";
+import {JB721GovernanceType} from "./enums/JB721GovernanceType.sol";
+import {IJB721TiersHookDeployer} from "./interfaces/IJB721TiersHookDeployer.sol";
+import {IJB721TiersHook} from "./interfaces/IJB721TiersHook.sol";
+import {JBDeploy721TiersHookConfig} from "./structs/JBDeploy721TiersHookConfig.sol";
+import {JB721TiersHook} from "./JB721TiersHook.sol";
+import {JBGoverned721TiersHook} from "./JBGoverned721TiersHook.sol";
 
-/// @title JBTiered721DelegateDeployer
-/// @notice Deploys a JBTiered721Delegate.
-/// @custom:version 3.3
-contract JBTiered721DelegateDeployer is IJBTiered721DelegateDeployer {
+/// @title JB721TiersHookDeployer
+/// @notice Deploys a `JB721TiersHook`.
+contract JB721TiersHookDeployer is IJB721TiersHookDeployer {
     //*********************************************************************//
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
@@ -27,84 +26,85 @@ contract JBTiered721DelegateDeployer is IJBTiered721DelegateDeployer {
     // ----------------------- internal properties ----------------------- //
     //*********************************************************************//
 
-    /**
-     * @notice 
-     * This contract's current nonce, used for the Juicebox delegates registry.
-     */
+    /// @notice This contract's current nonce, used for the Juicebox address registry.
     uint256 internal _nonce;
 
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
 
-    /// @notice A contract that supports on-chain governance across all tiers.
-    JBTiered721GovernanceDelegate public immutable onchainGovernance;
+    /// @notice A 721 tiers hook that supports on-chain governance across all tiers.
+    JBGoverned721TiersHook public immutable ONCHAIN_GOVERNANCE;
 
-    /// @notice A contract with no on-chain governance mechanism.
-    JBTiered721Delegate public immutable noGovernance;
+    /// @notice A 721 tiers hook without on-chain governance support.
+    JB721TiersHook public immutable NO_GOVERNANCE;
 
-    /// @notice A contract that stores references to deployer contracts of delegates.
-    IJBDelegatesRegistry public immutable delegatesRegistry;
+    /// @notice A registry which stores references to contracts and their deployers.
+    IJBAddressRegistry public immutable ADDRESS_REGISTRY;
 
     //*********************************************************************//
     // -------------------------- constructor ---------------------------- //
     //*********************************************************************//
 
-    /// @param _onchainGovernance Reference copy of the delegate that works with onchain governance.
-    /// @param _noGovernance Reference copy of a simpler delegate without on-chain governance.
-    /// @param _delegatesRegistry A contract that stores references to delegate deployer contracts.
+    /// @param onchainGovernance Reference copy of the hook which supports on-chain governance.
+    /// @param noGovernance Reference copy of a hook without on-chain governance support.
+    /// @param addressRegistry A registry which stores references to contracts and their deployers.
     constructor(
-        JBTiered721GovernanceDelegate _onchainGovernance,
-        JBTiered721Delegate _noGovernance,
-        IJBDelegatesRegistry _delegatesRegistry
+        JBGoverned721TiersHook onchainGovernance,
+        JB721TiersHook noGovernance,
+        IJBAddressRegistry addressRegistry
     ) {
-        onchainGovernance = _onchainGovernance;
-        noGovernance = _noGovernance;
-        delegatesRegistry = _delegatesRegistry;
+        ONCHAIN_GOVERNANCE = onchainGovernance;
+        NO_GOVERNANCE = noGovernance;
+        ADDRESS_REGISTRY = addressRegistry;
     }
 
     //*********************************************************************//
     // ---------------------- external transactions ---------------------- //
     //*********************************************************************//
 
-    /// @notice Deploys a delegate for the provided project.
-    /// @param _projectId The ID of the project for which the delegate will be deployed.
-    /// @param _deployTiered721DelegateData Structure containing data necessary for delegate deployment.
-    /// @return newDelegate The address of the newly deployed delegate.
-    function deployDelegateFor(
-        uint256 _projectId,
-        JBDeployTiered721DelegateData memory _deployTiered721DelegateData
-    ) external override returns (IJBTiered721Delegate newDelegate) {
-        // Deploy the governance variant that was requested
-        if (_deployTiered721DelegateData.governanceType == JB721GovernanceType.NONE) {
-            newDelegate = IJBTiered721Delegate(Clones.clone(address(noGovernance)));
-        } else if (_deployTiered721DelegateData.governanceType == JB721GovernanceType.ONCHAIN) {
-            newDelegate = IJBTiered721Delegate(Clones.clone(address(onchainGovernance)));
+    /// @notice Deploys a 721 tiers hook for the specified project.
+    /// @param projectId The ID of the project to deploy the hook for.
+    /// @param deployTiersHookConfig The config to deploy the hook with, which determines its behavior.
+    /// @return newHook The address of the newly deployed hook.
+    function deployHookFor(
+        uint256 projectId,
+        JBDeploy721TiersHookConfig memory deployTiersHookConfig
+    )
+        external
+        override
+        returns (IJB721TiersHook newHook)
+    {
+        // Deploy the governance variant specified by the config.
+        if (deployTiersHookConfig.governanceType == JB721GovernanceType.NONE) {
+            newHook = IJB721TiersHook(Clones.clone(address(NO_GOVERNANCE)));
+        } else if (deployTiersHookConfig.governanceType == JB721GovernanceType.ONCHAIN) {
+            newHook = IJB721TiersHook(Clones.clone(address(ONCHAIN_GOVERNANCE)));
         } else {
             revert INVALID_GOVERNANCE_TYPE();
         }
 
-        newDelegate.initialize(
-            _projectId,
-            _deployTiered721DelegateData.name,
-            _deployTiered721DelegateData.symbol,
-            _deployTiered721DelegateData.fundingCycleStore,
-            _deployTiered721DelegateData.baseUri,
-            _deployTiered721DelegateData.tokenUriResolver,
-            _deployTiered721DelegateData.contractUri,
-            _deployTiered721DelegateData.pricing,
-            _deployTiered721DelegateData.store,
-            _deployTiered721DelegateData.flags
+        newHook.initialize(
+            projectId,
+            deployTiersHookConfig.name,
+            deployTiersHookConfig.symbol,
+            deployTiersHookConfig.rulesets,
+            deployTiersHookConfig.baseUri,
+            deployTiersHookConfig.tokenUriResolver,
+            deployTiersHookConfig.contractUri,
+            deployTiersHookConfig.tiersConfig,
+            deployTiersHookConfig.store,
+            deployTiersHookConfig.flags
         );
 
-        // Transfer the delegate ownership to the address that made this deployment.
-        JBOwnable(address(newDelegate)).transferOwnership(msg.sender);
+        // Transfer the hook's ownership to the address that called this function.
+        JBOwnable(address(newHook)).transferOwnership(msg.sender);
 
-        // Add the delegate to the registry. Contract nonce starts at 1.
-        delegatesRegistry.addDelegate(address(this), ++_nonce);
+        // Add the hook to the address registry. This contract's nonce starts at 1.
+        ADDRESS_REGISTRY.registerAddress(address(this), ++_nonce);
 
-        emit DelegateDeployed(_projectId, newDelegate, _deployTiered721DelegateData.governanceType);
+        emit HookDeployed(projectId, newHook, deployTiersHookConfig.governanceType);
 
-        return newDelegate;
+        return newHook;
     }
 }

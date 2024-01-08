@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { IJBDirectory } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBDirectory.sol";
+import {IJBDirectory} from "lib/juice-contracts-v4/src/interfaces/IJBDirectory.sol";
 
-import { JB721GovernanceType } from "../enums/JB721GovernanceType.sol";
-import { JBDeployTiered721DelegateData } from "../structs/JBDeployTiered721DelegateData.sol";
-import { IJBTiered721Delegate } from "./IJBTiered721Delegate.sol";
+import {JB721GovernanceType} from "../enums/JB721GovernanceType.sol";
+import {JBDeploy721TiersHookConfig} from "../structs/JBDeploy721TiersHookConfig.sol";
+import {IJB721TiersHook} from "./IJB721TiersHook.sol";
 
-interface IJBTiered721DelegateDeployer {
-    event DelegateDeployed(
-        uint256 indexed projectId,
-        IJBTiered721Delegate newDelegate,
-        JB721GovernanceType governanceType
-    );
+interface IJB721TiersHookDeployer {
+    event HookDeployed(uint256 indexed projectId, IJB721TiersHook newHook, JB721GovernanceType governanceType);
 
-    function deployDelegateFor(
+    function deployHookFor(
         uint256 projectId,
-        JBDeployTiered721DelegateData memory deployTieredNFTRewardDelegateData
-    ) external returns (IJBTiered721Delegate delegate);
+        JBDeploy721TiersHookConfig memory deployTiersHookConfig
+    )
+        external
+        returns (IJB721TiersHook hook);
 }

@@ -1,33 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { IJBDirectory } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBDirectory.sol";
-import { IJBFundingCycleStore } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBFundingCycleStore.sol";
-import { IJBPrices } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBPrices.sol";
+import {IJBDirectory} from "lib/juice-contracts-v4/src/interfaces/IJBDirectory.sol";
+import {IJBRulesets} from "lib/juice-contracts-v4/src/interfaces/IJBRulesets.sol";
+import {IJBPrices} from "lib/juice-contracts-v4/src/interfaces/IJBPrices.sol";
 
-import { IJB721Delegate } from "./IJB721Delegate.sol";
-import { IJB721TokenUriResolver } from "./IJB721TokenUriResolver.sol";
-import { IJBTiered721DelegateStore } from "./IJBTiered721DelegateStore.sol";
-import { JB721PricingParams } from "./../structs/JB721PricingParams.sol";
-import { JB721TierParams } from "./../structs/JB721TierParams.sol";
-import { JBTiered721Flags } from "./../structs/JBTiered721Flags.sol";
-import { JBTiered721MintReservesForTiersData } from "./../structs/JBTiered721MintReservesForTiersData.sol";
-import { JBTiered721MintForTiersData } from "./../structs/JBTiered721MintForTiersData.sol";
+import {IJB721Hook} from "./IJB721Hook.sol";
+import {IJB721TokenUriResolver} from "./IJB721TokenUriResolver.sol";
+import {IJB721TiersHookStore} from "./IJB721TiersHookStore.sol";
+import {JB721InitTiersConfig} from "./../structs/JB721InitTiersConfig.sol";
+import {JB721TierConfig} from "./../structs/JB721TierConfig.sol";
+import {JB721TiersHookFlags} from "./../structs/JB721TiersHookFlags.sol";
+import {JB721TiersMintReservesParams} from "./../structs/JB721TiersMintReservesParams.sol";
 
-interface IJBTiered721Delegate is IJB721Delegate {
+interface IJB721TiersHook is IJB721Hook {
     event Mint(
         uint256 indexed tokenId,
         uint256 indexed tierId,
         address indexed beneficiary,
-        uint256 totalAmountContributed,
+        uint256 totalAmountPaid,
         address caller
     );
 
-    event MintReservedToken(
-        uint256 indexed tokenId, uint256 indexed tierId, address indexed beneficiary, address caller
-    );
+    event MintReservedNft(uint256 indexed tokenId, uint256 indexed tierId, address indexed beneficiary, address caller);
 
-    event AddTier(uint256 indexed tierId, JB721TierParams data, address caller);
+    event AddTier(uint256 indexed tierId, JB721TierConfig tier, address caller);
 
     event RemoveTier(uint256 indexed tierId, address caller);
 
@@ -39,35 +36,35 @@ interface IJBTiered721Delegate is IJB721Delegate {
 
     event SetTokenUriResolver(IJB721TokenUriResolver indexed newResolver, address caller);
 
-    event AddCredits(
-        uint256 indexed changeAmount, uint256 indexed newTotalCredits, address indexed account, address caller
+    event AddPayCredits(
+        uint256 indexed amount, uint256 indexed newTotalCredits, address indexed account, address caller
     );
 
-    event UseCredits(
-        uint256 indexed changeAmount, uint256 indexed newTotalCredits, address indexed account, address caller
+    event UsePayCredits(
+        uint256 indexed amount, uint256 indexed newTotalCredits, address indexed account, address caller
     );
 
-    function codeOrigin() external view returns (address);
+    function CODE_ORIGIN() external view returns (address);
 
-    function store() external view returns (IJBTiered721DelegateStore);
+    function STORE() external view returns (IJB721TiersHookStore);
 
-    function fundingCycleStore() external view returns (IJBFundingCycleStore);
+    function RULESETS() external view returns (IJBRulesets);
 
     function pricingContext() external view returns (uint256, uint256, IJBPrices);
 
-    function creditsOf(address _address) external view returns (uint256);
+    function payCreditsOf(address addr) external view returns (uint256);
 
-    function firstOwnerOf(uint256 _tokenId) external view returns (address);
+    function firstOwnerOf(uint256 tokenId) external view returns (address);
 
     function baseURI() external view returns (string memory);
 
     function contractURI() external view returns (string memory);
 
-    function adjustTiers(JB721TierParams[] memory tierDataToAdd, uint256[] memory tierIdsToRemove) external;
+    function adjustTiers(JB721TierConfig[] memory tierDataToAdd, uint256[] memory tierIdsToRemove) external;
 
-    function mintReservesFor(JBTiered721MintReservesForTiersData[] memory mintReservesForTiersData) external;
+    function mintPendingReservesFor(JB721TiersMintReservesParams[] memory reserveMintParams) external;
 
-    function mintReservesFor(uint256 tierId, uint256 count) external;
+    function mintPendingReservesFor(uint256 tierId, uint256 count) external;
 
     function mintFor(uint16[] calldata tierIds, address beneficiary) external returns (uint256[] memory tokenIds);
 
@@ -77,18 +74,20 @@ interface IJBTiered721Delegate is IJB721Delegate {
         IJB721TokenUriResolver tokenUriResolver,
         uint256 encodedIPFSUriTierId,
         bytes32 encodedIPFSUri
-    ) external;
+    )
+        external;
 
     function initialize(
         uint256 projectId,
         string memory name,
         string memory symbol,
-        IJBFundingCycleStore fundingCycleStore,
+        IJBRulesets rulesets,
         string memory baseUri,
         IJB721TokenUriResolver tokenUriResolver,
         string memory contractUri,
-        JB721PricingParams memory pricing,
-        IJBTiered721DelegateStore store,
-        JBTiered721Flags memory flags
-    ) external;
+        JB721InitTiersConfig memory tiersConfig,
+        IJB721TiersHookStore store,
+        JB721TiersHookFlags memory flags
+    )
+        external;
 }

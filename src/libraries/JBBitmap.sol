@@ -1,48 +1,57 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity ^0.8.17;
 
-import { JBBitmapWord } from "../structs/JBBitmapWord.sol";
+import {JBBitmapWord} from "../structs/JBBitmapWord.sol";
 
 /// @title JBBitmap
-/// @notice Utilities to manage bool bitmap storing the inactive tiers.
+/// @notice Utilities to manage a bool bitmap. Used for storing inactive tiers.
 library JBBitmap {
-    /// @notice Initialize a BitmapWord struct, based on the mapping storage pointer and a given index.
-    function readId(mapping(uint256 => uint256) storage self, uint256 _index)
+    /// @notice Initialize a `JBBitmapWord` struct based on a mapping storage pointer and an index.
+    function readId(
+        mapping(uint256 => uint256) storage self,
+        uint256 index
+    )
         internal
         view
         returns (JBBitmapWord memory)
     {
-        uint256 _depth = _retrieveDepth(_index);
+        uint256 depth = _retrieveDepth(index);
 
-        return JBBitmapWord({currentWord: self[_depth], currentDepth: _depth});
+        return JBBitmapWord({currentWord: self[depth], currentDepth: depth});
     }
 
-    /// @notice Returns the status of a given bit, in the single word stored in a BitmapWord struct.
-    function isTierIdRemoved(JBBitmapWord memory self, uint256 _index) internal pure returns (bool) {
-        return (self.currentWord >> (_index % 256)) & 1 == 1;
+    /// @notice Get the status of the specified bit within the `JBBitmapWord` struct.
+    /// @dev The `index` is the index that the bit would have if the bitmap were reshaped to a 1*n matrix.
+    /// @return The boolean value at the specified index, which indicates whether the corresponding tier has been
+    /// removed.
+    function isTierIdRemoved(JBBitmapWord memory self, uint256 index) internal pure returns (bool) {
+        return (self.currentWord >> (index % 256)) & 1 == 1;
     }
 
-    /// @notice Returns the status of a bit in a given bitmap (index is the index in the reshaped bitmap matrix 1*n).
-    function isTierIdRemoved(mapping(uint256 => uint256) storage self, uint256 _index) internal view returns (bool) {
-        uint256 _depth = _retrieveDepth(_index);
-        return isTierIdRemoved(JBBitmapWord({currentWord: self[_depth], currentDepth: _depth}), _index);
+    /// @notice Get the status of the specified bit within the `JBBitmapWord` struct.
+    /// @dev The `index` is the index that the bit would have if the bitmap were reshaped to a 1*n matrix.
+    function isTierIdRemoved(mapping(uint256 => uint256) storage self, uint256 index) internal view returns (bool) {
+        uint256 depth = _retrieveDepth(index);
+        return isTierIdRemoved(JBBitmapWord({currentWord: self[depth], currentDepth: depth}), index);
     }
 
-    /// @notice Flip the bit at a given index to true (this is a one-way operation).
-    function removeTier(mapping(uint256 => uint256) storage self, uint256 _index) internal {
-        uint256 _depth = _retrieveDepth(_index);
-        self[_depth] |= uint256(1 << (_index % 256));
+    /// @notice Set the bit at the given index to true, indicating that the corresponding tier has been removed.
+    /// @dev This is a one-way operation.
+    function removeTier(mapping(uint256 => uint256) storage self, uint256 index) internal {
+        uint256 depth = _retrieveDepth(index);
+        self[depth] |= uint256(1 << (index % 256));
     }
 
-    /// @notice Return true if the index is in an another word than the one stored in the BitmapWord struct.
-    function refreshBitmapNeeded(JBBitmapWord memory self, uint256 _index) internal pure returns (bool) {
-        return _retrieveDepth(_index) != self.currentDepth;
+    /// @notice Check if the specified index is at a different depth than than the current depth of the `JBBitmapWord`
+    /// struct.
+    /// @dev If the depth is different, the bitmap's current depth needs to be updated.
+    /// @return Whether the bitmap needs to be refreshed.
+    function refreshBitmapNeeded(JBBitmapWord memory self, uint256 index) internal pure returns (bool) {
+        return _retrieveDepth(index) != self.currentDepth;
     }
 
-    // Lib internal
-
-    /// @notice Return the lines of the bitmap matrix where an index lies.
-    function _retrieveDepth(uint256 _index) internal pure returns (uint256) {
-        return _index >> 8; // div by 256
+    /// @notice Return the line number (depth) of a given index within the bitmap matrix.
+    function _retrieveDepth(uint256 index) internal pure returns (uint256) {
+        return index >> 8; // div by 256
     }
 }

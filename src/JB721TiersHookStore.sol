@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
-import { IJBTiered721DelegateStore } from "./interfaces/IJBTiered721DelegateStore.sol";
-import { IJB721TokenUriResolver } from "./interfaces/IJB721TokenUriResolver.sol";
-import { JBBitmap } from "./libraries/JBBitmap.sol";
-import { JBBitmapWord } from "./structs/JBBitmapWord.sol";
-import { JB721Tier } from "./structs/JB721Tier.sol";
-import { JB721TierParams } from "./structs/JB721TierParams.sol";
-import { JBStored721Tier } from "./structs/JBStored721Tier.sol";
-import { JBTiered721Flags } from "./structs/JBTiered721Flags.sol";
+import {IJB721TiersHookStore} from "./interfaces/IJB721TiersHookStore.sol";
+import {IJB721TokenUriResolver} from "./interfaces/IJB721TokenUriResolver.sol";
+import {JBBitmap} from "./libraries/JBBitmap.sol";
+import {JBBitmapWord} from "./structs/JBBitmapWord.sol";
+import {JB721Tier} from "./structs/JB721Tier.sol";
+import {JB721TierConfig} from "./structs/JB721TierConfig.sol";
+import {JBStored721Tier} from "./structs/JBStored721Tier.sol";
+import {JB721TiersHookFlags} from "./structs/JB721TiersHookFlags.sol";
 
-/// @title JBTiered721DelegateStore
-/// @notice This contract stores and manages data for an IJBTiered721Delegate's NFTs.
-contract JBTiered721DelegateStore is IJBTiered721DelegateStore {
+/// @title JB721TiersHookStore
+/// @notice This contract stores and manages data for an `IJB721TiersHook`'s NFTs.
+contract JB721TiersHookStore is IJB721TiersHookStore {
     using JBBitmap for mapping(uint256 => uint256);
     using JBBitmap for JBBitmapWord;
 
@@ -21,15 +21,15 @@ contract JBTiered721DelegateStore is IJBTiered721DelegateStore {
     //*********************************************************************//
 
     error CANT_MINT_MANUALLY();
-    error INSUFFICIENT_AMOUNT();
-    error INSUFFICIENT_RESERVES();
+    error PRICE_EXCEEDS_AMOUNT();
+    error INSUFFICIENT_PENDING_RESERVES();
     error INVALID_CATEGORY_SORT_ORDER();
     error INVALID_QUANTITY();
     error INVALID_TIER();
     error MAX_TIERS_EXCEEDED();
-    error NO_QUANTITY();
-    error OUT();
-    error RESERVED_RATE_NOT_ALLOWED();
+    error NO_SUPPLY();
+    error INSUFFICIENT_SUPPLY_REMAINING();
+    error RESERVE_FREQUENCY_NOT_ALLOWED();
     error MANUAL_MINTING_NOT_ALLOWED();
     error TIER_REMOVED();
     error VOTING_UNITS_NOT_ALLOWED();
@@ -39,279 +39,302 @@ contract JBTiered721DelegateStore is IJBTiered721DelegateStore {
     //*********************************************************************//
 
     /// @notice Just a kind reminder to our readers.
-    /// @dev Used in token ID generation.
+    /// @dev Used in NFT token ID generation.
     uint256 private constant _ONE_BILLION = 1_000_000_000;
-
-    //*********************************************************************//
-    // --------------------- internal stored properties ------------------ //
-    //*********************************************************************//
-
-    /// @notice Returns the tier ID which should come after the provided tier ID when sorting by contribution floor.
-    /// @dev If empty, assume the next tier ID should come after.
-    /// @custom:param _nft The NFT contract to get ordered tier ID from.
-    /// @custom:param _tierId The tier ID to get the following tier for.
-    /// @custom:returns The following tier's ID.
-    mapping(address => mapping(uint256 => uint256)) internal _tierIdAfter;
-
-    /// @notice Returns optional reserved token beneficiary addresses for the provided tier and NFT contract.
-    /// @custom:param _nft The NFT contract to which the reserved token beneficiary belongs.
-    /// @custom:param _tierId The ID of the tier.
-    /// @custom:returns The address of the reserved token beneficiary.
-    mapping(address => mapping(uint256 => address)) internal _reservedTokenBeneficiaryOf;
-
-    /// @notice Returns the tier at the provided contract and tier ID.
-    /// @custom:param _nft The NFT contract to which the tiers belong.
-    /// @custom:param _tierId The tier ID.
-    /// @custom:returns The stored tier.
-    mapping(address => mapping(uint256 => JBStored721Tier)) internal _storedTierOf;
-
-    /// @notice Returns flags that influence the behavior of each NFT contract.
-    /// @custom:param _nft The NFT contract for which the flags apply.
-    /// @custom:returns The flags.
-    mapping(address => JBTiered721Flags) internal _flagsOf;
-
-    /// @notice For each tier ID, return a bitmap containing flags indicating whether the tier has been removed.
-    /// @custom:param _nft The NFT contract to which the tier belongs.
-    /// @custom:param _depth The bitmap row. Each row stores 256 tiers.
-    /// @custom:returns _word The bitmap row's content.
-    mapping(address => mapping(uint256 => uint256)) internal _isTierRemovedBitmapWord;
-
-    /// @notice For each NFT, return the tier ID that comes last when sorting.
-    /// @dev If not set, it is assumed the `maxTierIdOf` is the last sorted.
-    /// @custom:param _nft The NFT contract to which the tier belongs.
-    mapping(address => uint256) internal _trackedLastSortTierIdOf;
-
-    /// @notice Returns the ID of the first tier in the provided NFT contract and category.
-    /// @custom:param _nft The NFT contract to get the tier ID of.
-    /// @custom:param _category The category to get the first tier ID of.
-    mapping(address => mapping(uint256 => uint256)) internal _startingTierIdOfCategory;
 
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
-    /// @notice Returns the largest tier ID used on the provided NFT contract.
+    /// @notice Returns the largest tier ID currently used on the provided NFT contract.
     /// @dev This may not include the last tier ID if it has been removed.
-    /// @custom:param _nft The NFT contract to get the largest tier ID from.
-    mapping(address => uint256) public override maxTierIdOf;
+    /// @custom:param nft The NFT contract to get the largest tier ID from.
+    mapping(address nft => uint256) public override maxTierIdOf;
 
-    /// @notice Returns the number of NFTs held by the provided address which belong to the provided tier and NFT contract.
-    /// @custom:param _nft The NFT contract to check balances for.
-    /// @custom:param _owner The address to get a balance for.
-    /// @custom:param _tierId The tier ID to get a balance for.
-    mapping(address => mapping(address => mapping(uint256 => uint256))) public override tierBalanceOf;
+    /// @notice Returns the number of NFTs which the provided owner address owns from the provided NFT contract and tier
+    /// ID.
+    /// @custom:param nft The NFT contract to get the balance from.
+    /// @custom:param owner The address to get the tier balance of.
+    /// @custom:param tierId The ID of the tier to get the balance for.
+    mapping(address nft => mapping(address owner => mapping(uint256 tierId => uint256))) public override tierBalanceOf;
 
-    /// @notice Returns the number of reserved tokens which have been minted within the provided tier and NFT contract.
-    /// @custom:param _nft The NFT contract that the reserved minting data belongs to.
-    /// @custom:param _tierId The tier ID to get a reserved token mint count for.
-    mapping(address => mapping(uint256 => uint256)) public override numberOfReservesMintedFor;
+    /// @notice Returns the number of reserve NFTs which have been minted from the provided tier ID of the provided NFT
+    /// contract.
+    /// @custom:param nft The NFT contract that the tier belongs to.
+    /// @custom:param tierId The ID of the tier to get the reserve mint count of.
+    mapping(address nft => mapping(uint256 tierId => uint256)) public override numberOfReservesMintedFor;
 
-    /// @notice Returns the number of tokens belonging to the provided tier and NFT contract which have been burned.
-    /// @custom:param _nft The NFT contract that the burning data belongs to.
-    /// @custom:param _tierId The tier ID of the tier to get a burned token count for.
-    mapping(address => mapping(uint256 => uint256)) public override numberOfBurnedFor;
+    /// @notice Returns the number of NFTs which have been burned from the provided tier ID of the provided NFT
+    /// contract.
+    /// @custom:param nft The NFT contract that the tier belongs to.
+    /// @custom:param tierId The ID of the tier to get the burn count of.
+    mapping(address nft => mapping(uint256 tierId => uint256)) public override numberOfBurnedFor;
 
-    /// @notice Returns the reserved token beneficiary address used when a tier doesn't specify a beneficiary.
-    /// @custom:param _nft The NFT contract to which the reserved token beneficiary applies.
-    mapping(address => address) public override defaultReservedTokenBeneficiaryOf;
+    /// @notice Returns the default reserve beneficiary for the provided NFT contract.
+    /// @dev If a tier has a reserve beneficiary set, it will override this value.
+    /// @custom:param nft The NFT contract to get the default reserve beneficiary of.
+    mapping(address nft => address) public override defaultReserveBeneficiaryOf;
 
-    /// @notice Returns a custom token URI resolver which supersedes the base URI.
-    /// @custom:param _nft The NFT contract to which the token URI resolver applies.
-    mapping(address => IJB721TokenUriResolver) public override tokenUriResolverOf;
+    /// @notice Returns the custom token URI resolver which overrides the default token URI resolver for the provided
+    /// NFT contract.
+    /// @custom:param nft The NFT contract to get the custom token URI resolver of.
+    mapping(address nft => IJB721TokenUriResolver) public override tokenUriResolverOf;
 
-    /// @notice Returns the encoded IPFS URI for the provided tier and NFT contract.
-    /// @dev Token URIs managed by this contract are stored as 32 bytes and based on stripped down IPFS hashes.
-    /// @custom:param _nft The NFT contract to which the encoded IPFS URI belongs.
-    /// @custom:param _tierId The tier ID to which the encoded IPFS URI belongs.
+    /// @notice Returns the encoded IPFS URI for the provided tier ID of the provided NFT contract.
+    /// @dev Token URIs managed by this contract are stored in 32 bytes, based on stripped down IPFS hashes.
+    /// @custom:param nft The NFT contract that the tier belongs to.
+    /// @custom:param tierId The ID of the tier to get the encoded IPFS URI of.
     /// @custom:returns The encoded IPFS URI.
-    mapping(address => mapping(uint256 => bytes32)) public override encodedIPFSUriOf;
+    mapping(address nft => mapping(uint256 tierId => bytes32)) public override encodedIPFSUriOf;
+
+    //*********************************************************************//
+    // --------------------- internal stored properties ------------------ //
+    //*********************************************************************//
+
+    /// @notice Returns the ID of the tier which comes after the provided tier ID (sorted by price).
+    /// @dev If empty, assume the next tier ID should come after.
+    /// @custom:param nft The address of the NFT contract to get the next tier ID from.
+    /// @custom:param tierId The ID of the tier to get the next tier ID in relation to.
+    /// @custom:returns The following tier's ID.
+    mapping(address nft => mapping(uint256 tierId => uint256)) internal _tierIdAfter;
+
+    /// @notice Returns the reserve beneficiary (if there is one) for the provided tier ID on the provided
+    /// `IJB721TiersHook` contract.
+    /// @custom:param nft The address of the NFT contract to get the reserve beneficiary from.
+    /// @custom:param tierId The ID of the tier to get the reserve beneficiary of.
+    /// @custom:returns The address of the reserved token beneficiary.
+    mapping(address nft => mapping(uint256 tierId => address)) internal _reserveBeneficiaryOf;
+
+    /// @notice Returns the stored tier of the provided tier ID on the provided `IJB721TiersHook` contract.
+    /// @custom:param nft The address of the NFT contract to get the tier from.
+    /// @custom:param tierId The ID of the tier to get.
+    /// @custom:returns The stored tier, as a `JBStored721Tier` struct.
+    mapping(address nft => mapping(uint256 tierId => JBStored721Tier)) internal _storedTierOf;
+
+    /// @notice Returns the flags which dictate the behavior of the provided `IJB721TiersHook` contract.
+    /// @custom:param nft The address of the NFT contract to get the flags for.
+    /// @custom:returns The flags.
+    mapping(address nft => JB721TiersHookFlags) internal _flagsOf;
+
+    /// @notice Get the bitmap word at the provided depth from the provided NFT contract's tier removal bitmap.
+    /// @dev See `JBBitmap` for more information.
+    /// @custom:param nft The NFT contract to get the bitmap word from.
+    /// @custom:param depth The depth of the bitmap row to get. Each row stores 256 tiers.
+    /// @custom:returns word The bitmap row's content.
+    mapping(address nft => mapping(uint256 depth => uint256 word)) internal _removedTiersBitmapWordOf;
+
+    /// @notice Return the ID of the last sorted tier from the provided NFT contract.
+    /// @dev If not set, it is assumed the `maxTierIdOf` is the last sorted tier ID.
+    /// @custom:param nft The NFT contract to get the last sorted tier ID from.
+    mapping(address nft => uint256) internal _lastTrackedSortedTierIdOf;
+
+    /// @notice Returns the ID of the first tier in the provided category on the provided NFT contract.
+    /// @custom:param nft The NFT contract to get the category's first tier ID from.
+    /// @custom:param category The category to get the first tier ID of.
+    mapping(address nft => mapping(uint256 category => uint256)) internal _startingTierIdOfCategory;
+
 
     //*********************************************************************//
     // ------------------------- external views -------------------------- //
     //*********************************************************************//
 
-    /// @notice Gets an array of active tiers.
-    /// @param _nft The NFT contract to get tiers for.
-    /// @param _categories The categories of the tiers to get. Send empty for all categories.
-    /// @param _includeResolvedUri If enabled, if there's a token URI resolver, the content will be resolved and included.
-    /// @param _startingId The starting tier ID of the array of tiers sorted by contribution floor. Send 0 to get all active tiers.
-    /// @param _size The number of tiers to include.
-    /// @return _tiers An array of active tiers.
+    /// @notice Gets an array of currently active NFT tiers for the provided NFT contract.
+    /// @param nft The NFT contract to get the tiers of.
+    /// @param categories An array tier categories to get tiers from. Send an empty array to get all categories.
+    /// @param includeResolvedUri If set to `true`, if the contract has a token URI resolver, its content will be
+    /// resolved and included.
+    /// @param startingId The ID of the first tier to get (sorted by price). Send 0 to get all active tiers.
+    /// @param size The number of tiers to include.
+    /// @return tiers An array of active NFT tiers.
     function tiersOf(
-        address _nft,
-        uint256[] calldata _categories,
-        bool _includeResolvedUri,
-        uint256 _startingId,
-        uint256 _size
-    ) external view override returns (JB721Tier[] memory _tiers) {
+        address nft,
+        uint256[] calldata categories,
+        bool includeResolvedUri,
+        uint256 startingId,
+        uint256 size
+    )
+        external
+        view
+        override
+        returns (JB721Tier[] memory tiers)
+    {
         // Keep a reference to the last tier ID.
-        uint256 _lastTierId = _lastSortedTierIdOf(_nft);
+        uint256 lastTierId = _lastSortedTierIdOf(nft);
 
-        // Retuen an empty array if there are no tiers.
-        if (_lastTierId == 0) return _tiers;
+        // Return an empty array if there are no tiers.
+        if (lastTierId == 0) return tiers;
 
-        // Initialize an array with the appropriate length.
-        _tiers = new JB721Tier[](_size);
+        // Initialize an array with the provided length.
+        tiers = new JB721Tier[](size);
 
-        // Count the number of included tiers.
-        uint256 _numberOfIncludedTiers;
+        // Count the number of tiers to include in the result.
+        uint256 numberOfIncludedTiers;
 
         // Keep a reference to the tier being iterated upon.
-        JBStored721Tier memory _storedTier;
+        JBStored721Tier memory storedTier;
 
-        // Initialize a BitmapWord to track if a tier has been removed.
-        JBBitmapWord memory _bitmapWord;
+        // Initialize a `JBBitmapWord` to track if whether tiers have been removed.
+        JBBitmapWord memory bitmapWord;
 
-        // Keep a reference to the iterable variable.
-        uint256 _i;
+        // Keep a reference to an iterator variable to represent the category being iterated upon.
+        uint256 i;
 
         // Iterate at least once.
         do {
-            // Break if the size limit has been reached.
-            if (_numberOfIncludedTiers == _size) break;
+            // Stop iterating if the size limit has been reached.
+            if (numberOfIncludedTiers == size) break;
 
-            // Get a reference to the tier ID being iterated upon, starting with the first tier ID if no starting ID was specified.
-            uint256 _currentSortedTierId = _startingId != 0
-                ? _startingId
-                : _firstSortedTierIdOf(_nft, _categories.length == 0 ? 0 : _categories[_i]);
+            // Get a reference to the ID of the tier being iterated upon, starting with the first tier ID if no starting
+            // ID was specified.
+            uint256 currentSortedTierId =
+                startingId != 0 ? startingId : _firstSortedTierIdOf(nft, categories.length == 0 ? 0 : categories[i]);
 
-            // Make the sorted array.
-            while (_currentSortedTierId != 0 && _numberOfIncludedTiers < _size) {
-                if (!_isTierRemovedWithRefresh(_nft, _currentSortedTierId, _bitmapWord)) {
-                    _storedTier = _storedTierOf[_nft][_currentSortedTierId];
+            // Add the tiers from the category being iterated upon.
+            while (currentSortedTierId != 0 && numberOfIncludedTiers < size) {
+                if (!_isTierRemovedWithRefresh(nft, currentSortedTierId, bitmapWord)) {
+                    storedTier = _storedTierOf[nft][currentSortedTierId];
 
-                    if (_categories.length != 0 && _storedTier.category > _categories[_i]) {
+                    // If categories were provided and the current tier's category is greater than category being added,
+                    // break.
+                    if (categories.length != 0 && storedTier.category > categories[i]) {
                         break;
                     }
                     // If a category is specified and matches, add the returned values.
-                    else if (_categories.length == 0 || _storedTier.category == _categories[_i]) {
+                    else if (categories.length == 0 || storedTier.category == categories[i]) {
                         // Add the tier to the array being returned.
-                        _tiers[_numberOfIncludedTiers++] =
-                            _getTierFrom(_nft, _currentSortedTierId, _storedTier, _includeResolvedUri);
+                        tiers[numberOfIncludedTiers++] =
+                            _getTierFrom(nft, currentSortedTierId, storedTier, includeResolvedUri);
                     }
                 }
                 // Set the next sorted tier ID.
-                _currentSortedTierId = _nextSortedTierIdOf(_nft, _currentSortedTierId, _lastTierId);
+                currentSortedTierId = _nextSortedTierIdOf(nft, currentSortedTierId, lastTierId);
             }
 
             unchecked {
-                ++_i;
+                ++i;
             }
-        } while (_i < _categories.length);
+        } while (i < categories.length);
 
         // Resize the array if there are removed tiers.
-        if (_numberOfIncludedTiers != _size) {
+        if (numberOfIncludedTiers != size) {
             assembly ("memory-safe") {
-                mstore(_tiers, _numberOfIncludedTiers)
+                mstore(tiers, numberOfIncludedTiers)
             }
         }
     }
 
-    /// @notice Return the tier for the provided tier ID and NFT contract.
-    /// @param _nft The NFT contract to get a tier from.
-    /// @param _id The tier ID of the tier to get.
-    /// @param _includeResolvedUri If enabled, if there's a token URI resolver, the content will be resolved and included.
+    /// @notice Get the tier with the provided ID from the provided NFT contract.
+    /// @param nft The NFT contract to get the tier from.
+    /// @param id The ID of the tier to get.
+    /// @param includeResolvedUri If set to `true`, if the contract has a token URI resolver, its content will be
+    /// resolved and included.
     /// @return The tier.
-    function tierOf(address _nft, uint256 _id, bool _includeResolvedUri)
-        public
-        view
-        override
-        returns (JB721Tier memory)
-    {
-        return _getTierFrom(_nft, _id, _storedTierOf[_nft][_id], _includeResolvedUri);
+    function tierOf(address nft, uint256 id, bool includeResolvedUri) public view override returns (JB721Tier memory) {
+        return _getTierFrom(nft, id, _storedTierOf[nft][id], includeResolvedUri);
     }
 
-    /// @notice Return the tier for the provided token ID and NFT contract.
-    /// @param _nft The NFT contract to get a tier from.
-    /// @param _tokenId The token ID to return the tier of.
-    /// @param _includeResolvedUri If enabled, if there's a token URI resolver, the content will be resolved and included.
+    /// @notice Get the tier of the NFT with the provided token ID in the provided NFT contract.
+    /// @param nft The NFT contract that the tier belongs to.
+    /// @param tokenId The token ID of the NFT to get the tier of.
+    /// @param includeResolvedUri If set to `true`, if the contract has a token URI resolver, its content will be
+    /// resolved and included.
     /// @return The tier.
-    function tierOfTokenId(address _nft, uint256 _tokenId, bool _includeResolvedUri)
+    function tierOfTokenId(
+        address nft,
+        uint256 tokenId,
+        bool includeResolvedUri
+    )
         external
         view
         override
         returns (JB721Tier memory)
     {
         // Get a reference to the tier's ID.
-        uint256 _tierId = tierIdOfToken(_tokenId);
-        return _getTierFrom(_nft, _tierId, _storedTierOf[_nft][_tierId], _includeResolvedUri);
+        uint256 tierId = tierIdOfToken(tokenId);
+        return _getTierFrom(nft, tierId, _storedTierOf[nft][tierId], includeResolvedUri);
     }
 
-    /// @notice The total number of NFTs issued from all tiers of the provided NFT contract.
-    /// @param _nft The NFT contract to get a total supply of.
-    /// @return supply The total number of NFTs issued from all tiers.
-    function totalSupplyOf(address _nft) external view override returns (uint256 supply) {
+    /// @notice Get the number of NFTs which have been minted from the provided NFT contract (across all tiers).
+    /// @param nft The NFT contract to get a total supply of.
+    /// @return supply The total number of NFTs minted from all tiers on the contract.
+    function totalSupplyOf(address nft) external view override returns (uint256 supply) {
         // Keep a reference to the tier being iterated on.
-        JBStored721Tier memory _storedTier;
+        JBStored721Tier memory storedTier;
 
         // Keep a reference to the greatest tier ID.
-        uint256 _maxTierId = maxTierIdOf[_nft];
+        uint256 maxTierId = maxTierIdOf[nft];
 
-        for (uint256 _i = _maxTierId; _i != 0;) {
+        for (uint256 i = maxTierId; i != 0;) {
             // Set the tier being iterated on.
-            _storedTier = _storedTierOf[_nft][_i];
+            storedTier = _storedTierOf[nft][i];
 
             // Increment the total supply by the number of tokens already minted.
-            supply += _storedTier.initialQuantity - _storedTier.remainingQuantity;
+            supply += storedTier.initialSupply - storedTier.remainingSupply;
 
             unchecked {
-                --_i;
+                --i;
             }
         }
     }
 
-    /// @notice Returns the number of currently mintable reserved tokens for the provided tier ID and NFT contract.
-    /// @param _nft The NFT contract to check for mintable reserved tokens.
-    /// @param _tierId The tier ID to check for mintable reserved tokens.
-    /// @return The number of currently outstanding reserved tokens within the tier and contract.
-    function numberOfReservedTokensOutstandingFor(address _nft, uint256 _tierId)
-        external
-        view
-        override
-        returns (uint256)
-    {
-        return _numberOfReservedTokensOutstandingFor(_nft, _tierId, _storedTierOf[_nft][_tierId]);
+    /// @notice Get the number of pending reserve NFTs for the provided tier ID of the provided NFT contract.
+    /// @dev "Pending" means that the NFTs have been reserved, but have not been minted yet.
+    /// @param nft The NFT contract to check for pending reserved NFTs.
+    /// @param tierId The ID of the tier to get the number of pending reserves for.
+    /// @return The number of pending reserved NFTs.
+    function numberOfPendingReservesFor(address nft, uint256 tierId) external view override returns (uint256) {
+        return _numberOfPendingReservesFor(nft, tierId, _storedTierOf[nft][tierId]);
     }
 
-    /// @notice Returns the total voting units from all of an addresses' NFTs (across all tiers) for the provided NFT contract. NFTs have a tier-specific number of voting units.
-    /// @param _nft The NFT contract to get voting units within.
-    /// @param _account The address to get the voting units of.
-    /// @return units The total voting units for the address.
-    function votingUnitsOf(address _nft, address _account) external view virtual override returns (uint256 units) {
+    /// @notice Get the number of voting units the provided address has for the provided NFT contract (across all
+    /// tiers).
+    /// @dev NFTs have a tier-specific number of voting units. If the tier does not have a custom number of voting
+    /// units, the price is used.
+    /// @param nft The NFT contract to get the voting units within.
+    /// @param account The address to get the voting unit total of.
+    /// @return units The total voting units the address has within the NFT contract.
+    function votingUnitsOf(address nft, address account) external view virtual override returns (uint256 units) {
         // Keep a reference to the greatest tier ID.
-        uint256 _maxTierId = maxTierIdOf[_nft];
+        uint256 maxTierId = maxTierIdOf[nft];
 
         // Keep a reference to the balance being iterated upon.
-        uint256 _balance;
+        uint256 balance;
 
         // Keep a reference to the stored tier.
-        JBStored721Tier memory _storedTier;
+        JBStored721Tier memory storedTier;
 
         // Loop through all tiers.
-        for (uint256 _i = _maxTierId; _i != 0;) {
+        for (uint256 i = maxTierId; i != 0;) {
             // Get a reference to the account's balance in this tier.
-            _balance = tierBalanceOf[_nft][_account][_i];
+            balance = tierBalanceOf[nft][account][i];
 
-            if (_balance != 0) _storedTier = _storedTierOf[_nft][_i];
+            if (balance != 0) storedTier = _storedTierOf[nft][i];
 
-            (,, bool _useVotingUnits) = _unpackBools(_storedTier.packedBools);
+            (,, bool useVotingUnits) = _unpackBools(storedTier.packedBools);
 
-            // Add the tier's voting units.
-            // Use either the tier's price or custom set voting units.
-            units += _balance * (_useVotingUnits ? _storedTier.votingUnits : _storedTier.price);
+            // Add the voting units for the address' balance in this tier.
+            // Use custom voting units if set. Otherwise, use the tier's price.
+            units += balance * (useVotingUnits ? storedTier.votingUnits : storedTier.price);
 
             unchecked {
-                --_i;
+                --i;
             }
         }
     }
 
-    /// @notice Returns the voting units for an addresses' NFTs in one tier. NFTs have a tier-specific number of voting units.
-    /// @param _nft The NFT contract to get voting units within.
-    /// @param _account The address to get the voting units of.
-    /// @param _tierId The tier ID to get voting units within.
-    /// @return The voting units for the address within the tier.
-    function tierVotingUnitsOf(address _nft, address _account, uint256 _tierId)
+    /// @notice Returns the number of voting units an addresses has within the specified tier of the specified NFT
+    /// contract.
+    /// @dev NFTs have a tier-specific number of voting units. If the tier does not have a custom number of voting
+    /// units, the price is used.
+    /// @param nft The NFT contract that the tier belongs to.
+    /// @param account The address to get the voting units of within the tier.
+    /// @param tierId The ID of the tier to get voting units within.
+    /// @return The address' voting units within the tier.
+    function tierVotingUnitsOf(
+        address nft,
+        address account,
+        uint256 tierId
+    )
         external
         view
         virtual
@@ -319,761 +342,782 @@ contract JBTiered721DelegateStore is IJBTiered721DelegateStore {
         returns (uint256)
     {
         // Get a reference to the account's balance in this tier.
-        uint256 _balance = tierBalanceOf[_nft][_account][_tierId];
+        uint256 balance = tierBalanceOf[nft][account][tierId];
 
-        if (_balance == 0) return 0;
+        if (balance == 0) return 0;
 
-        // Add the tier's voting units.
-        return _balance * _storedTierOf[_nft][_tierId].votingUnits;
+        // Return the address' voting units within the tier.
+        return balance * _storedTierOf[nft][tierId].votingUnits;
     }
 
-    /// @notice Resolves the encoded IPFS URI of the tier for the provided token ID and NFT contract.
-    /// @param _nft The NFT contract to which the encoded IPFS URI belongs.
-    /// @param _tokenId The token ID to get the encoded IPFS URI of.
+    /// @notice Resolves the encoded IPFS URI for the tier of the NFT with the provided token ID from the provided NFT
+    /// contract.
+    /// @param nft The NFT contract that the encoded IPFS URI belongs to.
+    /// @param tokenId The token ID of the NFT to get the encoded tier IPFS URI of.
     /// @return The encoded IPFS URI.
-    function encodedTierIPFSUriOf(address _nft, uint256 _tokenId) external view override returns (bytes32) {
-        return encodedIPFSUriOf[_nft][tierIdOfToken(_tokenId)];
+    function encodedTierIPFSUriOf(address nft, uint256 tokenId) external view override returns (bytes32) {
+        return encodedIPFSUriOf[nft][tierIdOfToken(tokenId)];
     }
 
-    /// @notice Flags that influence the behavior of each NFT.
-    /// @param _nft The NFT contract for which the flags apply.
+    /// @notice Get the flags that dictate the behavior of the provided NFT contract.
+    /// @param nft The NFT contract to get the flags of.
     /// @return The flags.
-    function flagsOf(address _nft) external view override returns (JBTiered721Flags memory) {
-        return _flagsOf[_nft];
+    function flagsOf(address nft) external view override returns (JB721TiersHookFlags memory) {
+        return _flagsOf[nft];
     }
 
-    /// @notice Check if the provided tier has been removed from the current set of tiers.
-    /// @param _nft The NFT contract of the tier to check for removal.
-    /// @param _tierId The tier ID to check for removal.
-    /// @return True if the tier has been removed.
-    function isTierRemoved(address _nft, uint256 _tierId) external view override returns (bool) {
-        JBBitmapWord memory _bitmapWord = _isTierRemovedBitmapWord[_nft].readId(_tierId);
+    /// @notice Check if the provided tier has been removed from the provided NFT contract.
+    /// @param nft The NFT contract the tier belongs to.
+    /// @param tierId The ID of the tier to check the removal status of.
+    /// @return A bool which is `true` if the tier has been removed, and `false` otherwise.
+    function isTierRemoved(address nft, uint256 tierId) external view override returns (bool) {
+        JBBitmapWord memory bitmapWord = _removedTiersBitmapWordOf[nft].readId(tierId);
 
-        return _bitmapWord.isTierIdRemoved(_tierId);
+        return bitmapWord.isTierIdRemoved(tierId);
     }
 
     //*********************************************************************//
     // -------------------------- public views --------------------------- //
     //*********************************************************************//
 
-    /// @notice The total number of tokens owned by the provided address.
-    /// @param _nft The NFT contract to check the balance within.
-    /// @param _owner The address to check the balance of.
-    /// @return balance The number of tokens owned by the owner across all tiers within the NFT contract.
-    function balanceOf(address _nft, address _owner) public view override returns (uint256 balance) {
+    /// @notice Get the number of NFTs that the specified address has from the specified NFT contract (across all
+    /// tiers).
+    /// @param nft The NFT contract to get the balance within.
+    /// @param owner The address to check the balance of.
+    /// @return balance The number of NFTs the owner has from the NFT contract.
+    function balanceOf(address nft, address owner) public view override returns (uint256 balance) {
         // Keep a reference to the greatest tier ID.
-        uint256 _maxTierId = maxTierIdOf[_nft];
+        uint256 maxTierId = maxTierIdOf[nft];
 
         // Loop through all tiers.
-        for (uint256 _i = _maxTierId; _i != 0;) {
+        for (uint256 i = maxTierId; i != 0;) {
             // Get a reference to the account's balance within this tier.
-            balance += tierBalanceOf[_nft][_owner][_i];
+            balance += tierBalanceOf[nft][owner][i];
 
             unchecked {
-                --_i;
+                --i;
             }
         }
     }
 
-    /// @notice The cumulative redemption weight of the given token IDs compared to the `totalRedemptionWeight`.
-    /// @param _nft The NFT contract which the redemption weight is being calculated within.
-    /// @param _tokenIds The IDs of the tokens to get the cumulative redemption weight of.
-    /// @return weight The weight.
-    function redemptionWeightOf(address _nft, uint256[] calldata _tokenIds)
+    /// @notice The combined redemption weight of the NFTs with the provided token IDs.
+    /// @dev Redemption weight is based on NFT price.
+    /// @dev Divide this result by the `totalRedemptionWeight` to get the portion of funds that can be reclaimed by
+    /// redeeming these NFTs.
+    /// @param nft The NFT contract that the NFTs belong to.
+    /// @param tokenIds The token IDs of the NFTs to get the redemption weight of.
+    /// @return weight The redemption weight.
+    function redemptionWeightOf(
+        address nft,
+        uint256[] calldata tokenIds
+    )
         public
         view
         override
         returns (uint256 weight)
     {
         // Get a reference to the total number of tokens.
-        uint256 _numberOfTokenIds = _tokenIds.length;
+        uint256 numberOfTokenIds = tokenIds.length;
 
-        // Add each token's tier's contribution floor to the weight.
-        for (uint256 _i; _i < _numberOfTokenIds;) {
-            weight += _storedTierOf[_nft][tierIdOfToken(_tokenIds[_i])].price;
-
-            unchecked {
-                ++_i;
-            }
+        // Add each NFT's price (from its tier) to the weight.
+        for (uint256 i; i < numberOfTokenIds; i++) {
+            weight += _storedTierOf[nft][tierIdOfToken(tokenIds[i])].price;
         }
     }
 
-    /// @notice The cumulative redemption weight for all token IDs.
-    /// @param _nft The NFT contract for which the redemption weight is being calculated.
-    /// @return weight The total weight.
-    function totalRedemptionWeight(address _nft) public view override returns (uint256 weight) {
+    /// @notice The combined redemption weight for all NFTs from the provided NFT contract.
+    /// @param nft The NFT contract to get the total redemption weight of.
+    /// @return weight The total redemption weight.
+    function totalRedemptionWeight(address nft) public view override returns (uint256 weight) {
         // Keep a reference to the greatest tier ID.
-        uint256 _maxTierId = maxTierIdOf[_nft];
+        uint256 maxTierId = maxTierIdOf[nft];
 
         // Keep a reference to the tier being iterated upon.
-        JBStored721Tier memory _storedTier;
+        JBStored721Tier memory storedTier;
 
-        // Add each token's tier's contribution floor to the weight.
-        for (uint256 _i; _i < _maxTierId;) {
+        // Add each NFT's price (from its tier) to the weight.
+        for (uint256 i; i < maxTierId; i++) {
             // Keep a reference to the stored tier.
             unchecked {
-                _storedTier = _storedTierOf[_nft][_i + 1];
+                storedTier = _storedTierOf[nft][i + 1];
             }
 
-            // Add the tier's contribution floor multiplied by the quantity minted.
-            weight += _storedTier.price
+            // Add the tier's price multiplied by the number of NFTs minted from the tier.
+            weight += storedTier.price
                 * (
-                    (_storedTier.initialQuantity - _storedTier.remainingQuantity)
-                        + _numberOfReservedTokensOutstandingFor(_nft, _i + 1, _storedTier)
+                    (storedTier.initialSupply - storedTier.remainingSupply)
+                        + _numberOfPendingReservesFor(nft, i + 1, storedTier)
                 );
-
-            unchecked {
-                ++_i;
-            }
         }
     }
 
-    /// @notice The tier ID of the provided token ID.
+    /// @notice The tier ID for the NFT with the provided token ID.
     /// @dev Tiers are 1-indexed from the `tiers` array, meaning the 0th element of the array is tier 1.
-    /// @param _tokenId The token ID to get the tier ID of.
-    /// @return The tier ID for the provided token ID.
-    function tierIdOfToken(uint256 _tokenId) public pure override returns (uint256) {
-        return _tokenId / _ONE_BILLION;
+    /// @param tokenId The token ID of the NFT to get the tier ID of.
+    /// @return The ID of the NFT's tier.
+    function tierIdOfToken(uint256 tokenId) public pure override returns (uint256) {
+        return tokenId / _ONE_BILLION;
     }
 
-    /// @notice The reserved token beneficiary address for the provided tier ID and NFT contract.
-    /// @param _nft The NFT contract to check the reserved token beneficiary within.
-    /// @param _tierId The tier ID to get the reserved token beneficiary of.
-    /// @return The reserved token beneficiary address.
-    function reservedTokenBeneficiaryOf(address _nft, uint256 _tierId) public view override returns (address) {
-        // Get the stored reserved token beneficiary.
-        address _storedReservedTokenBeneficiaryOfTier = _reservedTokenBeneficiaryOf[_nft][_tierId];
+    /// @notice The reserve beneficiary for the provided tier ID on the provided NFT contract.
+    /// @param nft The NFT contract that the tier belongs to.
+    /// @param tierId The ID of the tier to get the reserve beneficiary of.
+    /// @return The reserve beneficiary for the tier.
+    function reserveBeneficiaryOf(address nft, uint256 tierId) public view override returns (address) {
+        // Get the stored reserve beneficiary.
+        address storedReserveBeneficiaryOfTier = _reserveBeneficiaryOf[nft][tierId];
 
-        // If the tier has a beneficiary return it.
-        if (_storedReservedTokenBeneficiaryOfTier != address(0)) {
-            return _storedReservedTokenBeneficiaryOfTier;
+        // If the tier has a beneficiary specified, return it.
+        if (storedReserveBeneficiaryOfTier != address(0)) {
+            return storedReserveBeneficiaryOfTier;
         }
 
-        // Return the default.
-        return defaultReservedTokenBeneficiaryOf[_nft];
+        // Otherwise, return the contract's default reserve benficiary.
+        return defaultReserveBeneficiaryOf[nft];
     }
 
     //*********************************************************************//
     // ---------------------- external transactions ---------------------- //
     //*********************************************************************//
 
-    /// @notice Adds tiers.
-    /// @param _tiersToAdd The tiers to add.
-    /// @return tierIds The IDs of the tiers added.
-    function recordAddTiers(JB721TierParams[] calldata _tiersToAdd)
+    /// @notice Record newly added tiers.
+    /// @param tiersToAdd The tiers to add.
+    /// @return tierIds The IDs of the tiers being added.
+    function recordAddTiers(JB721TierConfig[] calldata tiersToAdd)
         external
         override
         returns (uint256[] memory tierIds)
     {
-        // Get a reference to the number of new tiers.
-        uint256 _numberOfNewTiers = _tiersToAdd.length;
+        // Get a reference to the number of tiers to add.
+        uint256 numberOfNewTiers = tiersToAdd.length;
 
-        // Keep a reference to the greatest tier ID.
-        uint256 _currentMaxTierIdOf = maxTierIdOf[msg.sender];
+        // Keep a reference to the current greatest tier ID.
+        uint256 currentMaxTierIdOf = maxTierIdOf[msg.sender];
 
-        // Make sure the max number of tiers hasn't been reached.
-        if (_currentMaxTierIdOf + _numberOfNewTiers > type(uint16).max) revert MAX_TIERS_EXCEEDED();
+        // Make sure the max number of tiers won't be exceeded.
+        if (currentMaxTierIdOf + numberOfNewTiers > type(uint16).max) revert MAX_TIERS_EXCEEDED();
 
-        // Keep a reference to the current last sorted tier ID.
-        uint256 _currentLastSortedTierId = _lastSortedTierIdOf(msg.sender);
+        // Keep a reference to the current last sorted tier ID (sorted by price).
+        uint256 currentLastSortedTierId = _lastSortedTierIdOf(msg.sender);
 
-        // Initialize an array with the appropriate length.
-        tierIds = new uint256[](_numberOfNewTiers);
+        // Initialize an array for the new tier IDs to be returned.
+        tierIds = new uint256[](numberOfNewTiers);
 
-        // Keep a reference to the starting sort ID for sorting new tiers if needed.
-        // There's no need for sorting if there are currently no tiers.
-        uint256 _startSortedTierId = _currentMaxTierIdOf == 0 ? 0 : _firstSortedTierIdOf(msg.sender, 0);
+        // Keep a reference to the first sorted tier ID, to use when sorting new tiers if needed.
+        // There's no need for sorting if there are no current tiers.
+        uint256 startSortedTierId = currentMaxTierIdOf == 0 ? 0 : _firstSortedTierIdOf(msg.sender, 0);
 
-        // Keep track of the previous tier ID.
-        uint256 _previous;
+        // Keep track of the previous tier's ID while iterating.
+        uint256 previousTierId;
 
         // Keep a reference to the tier being iterated upon.
-        JB721TierParams memory _tierToAdd;
+        JB721TierConfig memory tierToAdd;
 
-        // Keep a reference to the flags.
-        JBTiered721Flags memory _flags = _flagsOf[msg.sender];
+        // Keep a reference to the NFT contract's flags.
+        JB721TiersHookFlags memory flags = _flagsOf[msg.sender];
 
-        for (uint256 _i; _i < _numberOfNewTiers;) {
+        for (uint256 i; i < numberOfNewTiers; i++) {
             // Set the tier being iterated upon.
-            _tierToAdd = _tiersToAdd[_i];
+            tierToAdd = tiersToAdd[i];
 
-            // Make sure the max is enforced.
-            if (_tierToAdd.initialQuantity > _ONE_BILLION - 1) revert INVALID_QUANTITY();
+            // Make sure the supply maximum is enforced. If it's greater than one billion, it would overflow into the
+            // next tier.
+            if (tierToAdd.initialSupply > _ONE_BILLION - 1) revert INVALID_QUANTITY();
 
             // Keep a reference to the previous tier.
-            JB721TierParams memory _previousTier;
+            JB721TierConfig memory previousTier;
 
-            // Make sure the tier's category is greater than or equal to the previous tier's category.
-            if (_i != 0) {
-                // Set the reference to the previous tier.
-                _previousTier = _tiersToAdd[_i - 1];
+            // Make sure the tier's category is greater than or equal to the previously added tier's category.
+            if (i != 0) {
+                // Set the reference to the previously added tier.
+                previousTier = tiersToAdd[i - 1];
 
-                // Check category sort order.
-                if (_tierToAdd.category < _previousTier.category) revert INVALID_CATEGORY_SORT_ORDER();
+                // Revert if the category is not equal or greater than the previously added tier's category.
+                if (tierToAdd.category < previousTier.category) revert INVALID_CATEGORY_SORT_ORDER();
             }
 
-            // Make sure there are no voting units set if they're not allowed.
+            // Make sure the new tier doesn't have voting units if the NFT contract's flags don't allow it to.
             if (
-                _flags.lockVotingUnitChanges
+                flags.noNewTiersWithVotes
                     && (
-                        (_tierToAdd.useVotingUnits && _tierToAdd.votingUnits != 0)
-                            || (!_tierToAdd.useVotingUnits && _tierToAdd.price != 0)
+                        (tierToAdd.useVotingUnits && tierToAdd.votingUnits != 0)
+                            || (!tierToAdd.useVotingUnits && tierToAdd.price != 0)
                     )
             ) {
                 revert VOTING_UNITS_NOT_ALLOWED();
             }
 
-            // Make sure a reserved rate isn't set if changes should be locked, or if manual minting is allowed.
-            if ((_flags.lockReservedTokenChanges || _tierToAdd.allowManualMint) && _tierToAdd.reservedRate != 0) {
-                revert RESERVED_RATE_NOT_ALLOWED();
+            // Make sure the new tier doesn't have a reserve frequency if the NFT contract's flags don't allow it to,
+            // OR if manual minting is allowed.
+            if ((flags.noNewTiersWithReserves || tierToAdd.allowOwnerMint) && tierToAdd.reserveFrequency != 0) {
+                revert RESERVE_FREQUENCY_NOT_ALLOWED();
             }
 
-            // Make sure manual minting is not set if not allowed.
-            if (_flags.lockManualMintingChanges && _tierToAdd.allowManualMint) {
+            // Make sure the new tier doesn't have owner minting enabled if the NFT contract's flags don't allow it to.
+            if (flags.noNewTiersWithOwnerMinting && tierToAdd.allowOwnerMint) {
                 revert MANUAL_MINTING_NOT_ALLOWED();
             }
 
-            // Make sure there is some quantity.
-            if (_tierToAdd.initialQuantity == 0) revert NO_QUANTITY();
+            // Make sure the tier has a non-zero supply.
+            if (tierToAdd.initialSupply == 0) revert NO_SUPPLY();
 
-            // Get a reference to the tier ID.
-            uint256 _tierId = _currentMaxTierIdOf + _i + 1;
+            // Get a reference to the ID for the new tier.
+            uint256 tierId = currentMaxTierIdOf + i + 1;
 
-            // Add the tier with the iterative ID.
-            _storedTierOf[msg.sender][_tierId] = JBStored721Tier({
-                price: uint104(_tierToAdd.price),
-                remainingQuantity: uint32(_tierToAdd.initialQuantity),
-                initialQuantity: uint32(_tierToAdd.initialQuantity),
-                votingUnits: uint40(_tierToAdd.votingUnits),
-                reservedRate: uint16(_tierToAdd.reservedRate),
-                category: uint24(_tierToAdd.category),
-                packedBools: _packBools(_tierToAdd.allowManualMint, _tierToAdd.transfersPausable, _tierToAdd.useVotingUnits)
+            // Store the tier with that ID.
+            _storedTierOf[msg.sender][tierId] = JBStored721Tier({
+                price: uint104(tierToAdd.price),
+                remainingSupply: uint32(tierToAdd.initialSupply),
+                initialSupply: uint32(tierToAdd.initialSupply),
+                votingUnits: uint40(tierToAdd.votingUnits),
+                reserveFrequency: uint16(tierToAdd.reserveFrequency),
+                category: uint24(tierToAdd.category),
+                packedBools: _packBools(tierToAdd.allowOwnerMint, tierToAdd.transfersPausable, tierToAdd.useVotingUnits)
             });
 
-            // If this is the first tier in a new category, store its ID as such. The `_startingTierIdOfCategory` of the 0 category will always be the same as the `_tierIdAfter` the 0th tier.
-            if (_previousTier.category != _tierToAdd.category && _tierToAdd.category != 0) {
-                _startingTierIdOfCategory[msg.sender][_tierToAdd.category] = _tierId;
+            // If this is the first tier in a new category, store it as the first tier in that category.
+            // The `_startingTierIdOfCategory` of the category "0" will always be the same as the `_tierIdAfter` the 0th
+            // tier.
+            if (previousTier.category != tierToAdd.category && tierToAdd.category != 0) {
+                _startingTierIdOfCategory[msg.sender][tierToAdd.category] = tierId;
             }
 
-            // Set the reserved token beneficiary if needed.
-            if (_tierToAdd.reservedTokenBeneficiary != address(0)) {
-                if (_tierToAdd.shouldUseReservedTokenBeneficiaryAsDefault) {
-                    if (defaultReservedTokenBeneficiaryOf[msg.sender] != _tierToAdd.reservedTokenBeneficiary) {
-                        defaultReservedTokenBeneficiaryOf[msg.sender] = _tierToAdd.reservedTokenBeneficiary;
+            // Set the reserve beneficiary if needed.
+            if (tierToAdd.reserveBeneficiary != address(0)) {
+                if (tierToAdd.useReserveBeneficiaryAsDefault) {
+                    if (defaultReserveBeneficiaryOf[msg.sender] != tierToAdd.reserveBeneficiary) {
+                        defaultReserveBeneficiaryOf[msg.sender] = tierToAdd.reserveBeneficiary;
                     }
                 } else {
-                    _reservedTokenBeneficiaryOf[msg.sender][_tierId] = _tierToAdd.reservedTokenBeneficiary;
+                    _reserveBeneficiaryOf[msg.sender][tierId] = tierToAdd.reserveBeneficiary;
                 }
             }
 
-            // Set the encodedIPFSUri if needed.
-            if (_tierToAdd.encodedIPFSUri != bytes32(0)) {
-                encodedIPFSUriOf[msg.sender][_tierId] = _tierToAdd.encodedIPFSUri;
+            // Set the `encodedIPFSUri` if needed.
+            if (tierToAdd.encodedIPFSUri != bytes32(0)) {
+                encodedIPFSUriOf[msg.sender][tierId] = tierToAdd.encodedIPFSUri;
             }
 
-            if (_startSortedTierId != 0) {
-                // Keep track of the sorted tier ID.
-                uint256 _currentSortedTierId = _startSortedTierId;
+            if (startSortedTierId != 0) {
+                // Keep track of the sorted tier ID being iterated on.
+                uint256 currentSortedTierId = startSortedTierId;
 
-                // Keep a reference to the tier ID to iterate on next.
-                uint256 _next;
+                // Keep a reference to the tier ID to iterate to next.
+                uint256 nextTierId;
 
-                while (_currentSortedTierId != 0) {
+                // Make sure the tier is sorted correctly.
+                while (currentSortedTierId != 0) {
                     // Set the next tier ID.
-                    _next = _nextSortedTierIdOf(msg.sender, _currentSortedTierId, _currentLastSortedTierId);
+                    nextTierId = _nextSortedTierIdOf(msg.sender, currentSortedTierId, currentLastSortedTierId);
 
-                    // If the category is less than or equal to the tier being iterated on and the tier being iterated isn't among those being added, store the order.
+                    // If the category is less than or equal to the sorted tier being iterated on,
+                    // AND the tier being iterated on isn't among those being added, store the order.
                     if (
-                        _tierToAdd.category <= _storedTierOf[msg.sender][_currentSortedTierId].category
-                            && _currentSortedTierId <= _currentMaxTierIdOf
+                        tierToAdd.category <= _storedTierOf[msg.sender][currentSortedTierId].category
+                            && currentSortedTierId <= currentMaxTierIdOf
                     ) {
-                        // If the tier ID being iterated on isn't the next tier ID, set the tier ID after.
-                        if (_currentSortedTierId != _tierId + 1) {
-                            _tierIdAfter[msg.sender][_tierId] = _currentSortedTierId;
+                        // If the tier ID being iterated on isn't the next tier ID, set the `_tierIdAfter` (next tier
+                        // ID).
+                        if (currentSortedTierId != tierId + 1) {
+                            _tierIdAfter[msg.sender][tierId] = currentSortedTierId;
                         }
 
-                        // If this is the first tier being added, track the current last sorted tier ID if it's not already tracked.
-                        if (_trackedLastSortTierIdOf[msg.sender] != _currentLastSortedTierId) {
-                            _trackedLastSortTierIdOf[msg.sender] = _currentLastSortedTierId;
+                        // If this is the first tier being added, track it as the current last sorted tier ID (if it's
+                        // not already tracked).
+                        if (_lastTrackedSortedTierIdOf[msg.sender] != currentLastSortedTierId) {
+                            _lastTrackedSortedTierIdOf[msg.sender] = currentLastSortedTierId;
                         }
 
-                        // If the previous after tier ID was set to something else, set the previous tier ID after.
-                        if (_previous != _tierId - 1 || _tierIdAfter[msg.sender][_previous] != 0) {
-                            // Set the tier after the previous one being iterated on as the tier being added, or 0 if the tier ID is incremented.
-                            _tierIdAfter[msg.sender][_previous] = _previous == _tierId - 1 ? 0 : _tierId;
+                        // If the previous tier's `_tierIdAfter` was set to something else, update it.
+                        if (previousTierId != tierId - 1 || _tierIdAfter[msg.sender][previousTierId] != 0) {
+                            // Set the the previous tier's `_tierIdAfter` to the tier being added, or 0 if the tier ID is
+                            // incremented.
+                            _tierIdAfter[msg.sender][previousTierId] = previousTierId == tierId - 1 ? 0 : tierId;
                         }
 
-                        // For the next tier being added, start at the tier just placed.
-                        _startSortedTierId = _currentSortedTierId;
+                        // When the next tier is being added, start at the sorted tier just set.
+                        startSortedTierId = currentSortedTierId;
 
-                        // The tier just added is the previous for the next tier being added.
-                        _previous = _tierId;
+                        // Use the current tier ID as the "previous tier ID" when the next tier is being added.
+                        previousTierId = tierId;
 
-                        // Set current to zero to break out of the loop.
-                        _currentSortedTierId = 0;
+                        // Set the current sorted tier ID to zero to break out of the loop (the tier has been sorted).
+                        currentSortedTierId = 0;
                     }
-                    // If the tier being iterated on is the last tier, add the tier after it.
-                    else if (_next == 0 || _next > _currentMaxTierIdOf) {
-                        if (_tierId != _currentSortedTierId + 1) {
-                            _tierIdAfter[msg.sender][_currentSortedTierId] = _tierId;
+                    // If the tier being iterated on is the last tier, add the new tier after it.
+                    else if (nextTierId == 0 || nextTierId > currentMaxTierIdOf) {
+                        if (tierId != currentSortedTierId + 1) {
+                            _tierIdAfter[msg.sender][currentSortedTierId] = tierId;
                         }
 
                         // For the next tier being added, start at this current tier ID.
-                        _startSortedTierId = _tierId;
+                        startSortedTierId = tierId;
 
                         // Break out.
-                        _currentSortedTierId = 0;
+                        currentSortedTierId = 0;
 
                         // If there's currently a last sorted tier ID tracked, override it.
-                        if (_trackedLastSortTierIdOf[msg.sender] != 0) _trackedLastSortTierIdOf[msg.sender] = 0;
+                        if (_lastTrackedSortedTierIdOf[msg.sender] != 0) _lastTrackedSortedTierIdOf[msg.sender] = 0;
                     }
                     // Move on to the next tier ID.
                     else {
                         // Set the previous tier ID to be the current tier ID.
-                        _previous = _currentSortedTierId;
+                        previousTierId = currentSortedTierId;
 
                         // Go to the next tier ID.
-                        _currentSortedTierId = _next;
+                        currentSortedTierId = nextTierId;
                     }
                 }
             }
 
-            // Set the tier ID in the returned value.
-            tierIds[_i] = _tierId;
-
-            unchecked {
-                ++_i;
-            }
+            // Add the tier ID to the array being returned.
+            tierIds[i] = tierId;
         }
 
-        maxTierIdOf[msg.sender] = _currentMaxTierIdOf + _numberOfNewTiers;
+        // Update the maximum tier ID to include the new tiers.
+        maxTierIdOf[msg.sender] = currentMaxTierIdOf + numberOfNewTiers;
     }
 
-    /// @notice Record reserved token mints within the provided tier.
-    /// @param _tierId The ID of the tier to mint reserved tokens from.
-    /// @param _count The number of reserved tokens to mint.
-    /// @return tokenIds The IDs of the tokens being minted as reserves.
-    function recordMintReservesFor(uint256 _tierId, uint256 _count)
+    /// @notice Record reserve NFT minting for the provided tier ID on the provided NFT contract.
+    /// @param tierId The ID of the tier to mint reserves from.
+    /// @param count The number of reserve NFTs to mint.
+    /// @return tokenIds The token IDs of the reserve NFTs which were minted.
+    function recordMintReservesFor(
+        uint256 tierId,
+        uint256 count
+    )
         external
         override
         returns (uint256[] memory tokenIds)
     {
-        // Get a reference to the tier.
-        JBStored721Tier storage _storedTier = _storedTierOf[msg.sender][_tierId];
+        // Get a reference to the stored tier.
+        JBStored721Tier storage storedTier = _storedTierOf[msg.sender][tierId];
 
-        // Get a reference to the number of mintable reserved tokens for the tier.
-        uint256 _numberOfReservedTokensOutstanding =
-            _numberOfReservedTokensOutstandingFor(msg.sender, _tierId, _storedTier);
+        // Get a reference to the number of pending reserve NFTs for the tier.
+        // "Pending" means that the NFTs have been reserved, but have not been minted yet.
+        uint256 numberOfPendingReserves = _numberOfPendingReservesFor(msg.sender, tierId, storedTier);
 
-        // Can't mint more reserves than expected.
-        if (_count > _numberOfReservedTokensOutstanding) revert INSUFFICIENT_RESERVES();
+        // Can't mint more than the number of pending reserves.
+        if (count > numberOfPendingReserves) revert INSUFFICIENT_PENDING_RESERVES();
 
-        // Increment the number of reserved tokens minted.
-        numberOfReservesMintedFor[msg.sender][_tierId] += _count;
+        // Increment the number of reserve NFTs minted.
+        numberOfReservesMintedFor[msg.sender][tierId] += count;
 
-        // Initialize an array with the appropriate length.
-        tokenIds = new uint256[](_count);
+        // Initialize an array for the token IDs to be returned.
+        tokenIds = new uint256[](count);
 
-        // Keep a reference to the number of burned in the tier.
-        uint256 _numberOfBurnedFromTier = numberOfBurnedFor[msg.sender][_tierId];
+        // Keep a reference to the number of NFTs burned within the tier.
+        uint256 numberOfBurnedFromTier = numberOfBurnedFor[msg.sender][tierId];
 
-        for (uint256 _i; _i < _count;) {
-            // Generate the tokens.
-            tokenIds[_i] = _generateTokenId(
-                _tierId, _storedTier.initialQuantity - --_storedTier.remainingQuantity + _numberOfBurnedFromTier
+        for (uint256 i; i < count; i++) {
+            // Generate the NFTs.
+            tokenIds[i] = _generateTokenId(
+                tierId, storedTier.initialSupply - --storedTier.remainingSupply + numberOfBurnedFromTier
             );
+        }
+    }
 
+    /// @notice Record an NFT transfer.
+    /// @param tierId The ID of the tier that the NFT being transferred belongs to.
+    /// @param from The address that the NFT is being transferred from.
+    /// @param to The address that the NFT is being transferred to.
+    function recordTransferForTier(uint256 tierId, address from, address to) external override {
+        // If this is not a mint,
+        if (from != address(0)) {
+            // then subtract the tier balance from the sender.
+            --tierBalanceOf[msg.sender][from][tierId];
+        }
+
+        // If this is not a burn,
+        if (to != address(0)) {
             unchecked {
-                ++_i;
+                // then increase the tier balance for the receiver.
+                ++tierBalanceOf[msg.sender][to][tierId];
             }
         }
     }
 
-    /// @notice Record a token transfer.
-    /// @param _tierId The tier ID of the token being transferred.
-    /// @param _from The address the token is being transferred from.
-    /// @param _to The address the token is being transferred to.
-    function recordTransferForTier(uint256 _tierId, address _from, address _to) external override {
-        // If this is not a mint then subtract the tier balance from the original holder.
-        if (_from != address(0)) {
-            // Decrease the tier balance for the sender.
-            --tierBalanceOf[msg.sender][_from][_tierId];
-        }
-
-        // If this is a burn the balance is not added.
-        if (_to != address(0)) {
-            unchecked {
-                // Increase the tier balance for the beneficiary.
-                ++tierBalanceOf[msg.sender][_to][_tierId];
-            }
-        }
-    }
-
-    /// @notice Record removing the provided tiers.
-    /// @param _tierIds The tiers IDs to remove.
-    function recordRemoveTierIds(uint256[] calldata _tierIds) external override {
+    /// @notice Record tiers being removed.
+    /// @param tierIds The IDs of the tiers being removed.
+    function recordRemoveTierIds(uint256[] calldata tierIds) external override {
         // Get a reference to the number of tiers being removed.
-        uint256 _numTiers = _tierIds.length;
+        uint256 numTiers = tierIds.length;
 
         // Keep a reference to the tier ID being iterated upon.
-        uint256 _tierId;
+        uint256 tierId;
 
-        for (uint256 _i; _i < _numTiers;) {
+        for (uint256 i; i < numTiers; i++) {
             // Set the tier being iterated upon (0-indexed).
-            _tierId = _tierIds[_i];
+            tierId = tierIds[i];
 
-            // Set the tier as removed.
-            _isTierRemovedBitmapWord[msg.sender].removeTier(_tierId);
-
-            unchecked {
-                ++_i;
-            }
+            // Remove the tier by marking it as removed in the bitmap.
+            _removedTiersBitmapWordOf[msg.sender].removeTier(tierId);
         }
     }
 
-    /// @notice Record token mints in the provided tiers.
-    /// @param _amount The amount to base the mints on. All mints' price floors must fit within this amount.
-    /// @param _tierIds The tier IDs to mint from.
-    /// @param _isManualMint A flag indicating if the mint is being made manually by the NFT contract's owner.
-    /// @return tokenIds The IDs of the minted tokens.
-    /// @return leftoverAmount The amount left over after the mint.
-    function recordMint(uint256 _amount, uint16[] calldata _tierIds, bool _isManualMint)
+    /// @notice Record NFT mints from the provided tiers.
+    /// @param amount The amount being spent on NFTs. The total price must not exceed this amount.
+    /// @param tierIds The IDs of the tiers to mint from.
+    /// @param isOwnerMint A flag indicating whether this function is being directly called by the NFT contract's owner.
+    /// @return tokenIds The token IDs of the NFTs which were minted.
+    /// @return leftoverAmount The `amount` remaining after minting.
+    function recordMint(
+        uint256 amount,
+        uint16[] calldata tierIds,
+        bool isOwnerMint
+    )
         external
         override
         returns (uint256[] memory tokenIds, uint256 leftoverAmount)
     {
         // Set the leftover amount as the initial amount.
-        leftoverAmount = _amount;
+        leftoverAmount = amount;
 
         // Get a reference to the number of tiers.
-        uint256 _numberOfTiers = _tierIds.length;
+        uint256 numberOfTiers = tierIds.length;
 
         // Keep a reference to the tier being iterated on.
-        JBStored721Tier storage _storedTier;
+        JBStored721Tier storage storedTier;
 
         // Keep a reference to the tier ID being iterated on.
-        uint256 _tierId;
+        uint256 tierId;
 
-        // Initialize an array with the appropriate length.
-        tokenIds = new uint256[](_numberOfTiers);
+        // Initialize the array for the token IDs to be returned.
+        tokenIds = new uint256[](numberOfTiers);
 
-        // Initialize a BitmapWord for isRemoved.
-        JBBitmapWord memory _bitmapWord;
+        // Initialize a `JBBitmapWord` for checking whether tiers have been removed.
+        JBBitmapWord memory bitmapWord;
 
-        for (uint256 _i; _i < _numberOfTiers;) {
+        for (uint256 i; i < numberOfTiers; i++) {
             // Set the tier ID being iterated on.
-            _tierId = _tierIds[_i];
+            tierId = tierIds[i];
 
             // Make sure the tier hasn't been removed.
-            if (_isTierRemovedWithRefresh(msg.sender, _tierId, _bitmapWord)) revert TIER_REMOVED();
+            if (_isTierRemovedWithRefresh(msg.sender, tierId, bitmapWord)) revert TIER_REMOVED();
 
-            // Keep a reference to the tier being iterated on.
-            _storedTier = _storedTierOf[msg.sender][_tierId];
+            // Keep a reference to the stored tier being iterated on.
+            storedTier = _storedTierOf[msg.sender][tierId];
 
-            (bool _allowManualMint,,) = _unpackBools(_storedTier.packedBools);
+            (bool allowOwnerMint,,) = _unpackBools(storedTier.packedBools);
 
-            // If this is a manual mint, make sure manual minting is allowed.
-            if (_isManualMint && !_allowManualMint) revert CANT_MINT_MANUALLY();
+            // If this is an owner mint, make sure owner minting is allowed.
+            if (isOwnerMint && !allowOwnerMint) revert CANT_MINT_MANUALLY();
 
-            // Make sure the provided tier exists.
-            if (_storedTier.initialQuantity == 0) revert INVALID_TIER();
+            // Make sure the provided tier exists (tiers cannot have a supply of 0).
+            if (storedTier.initialSupply == 0) revert INVALID_TIER();
 
-            // Make sure the amount meets the tier's contribution floor.
-            if (_storedTier.price > leftoverAmount) revert INSUFFICIENT_AMOUNT();
+            // Make sure the `amount` is greater than or equal to the tier's price.
+            if (storedTier.price > leftoverAmount) revert PRICE_EXCEEDS_AMOUNT();
 
-            // Make sure there are enough units available.
-            if (
-                _storedTier.remainingQuantity <= _numberOfReservedTokensOutstandingFor(msg.sender, _tierId, _storedTier)
-            ) revert OUT();
-
-            // Mint the tokens.
-            unchecked {
-                // Keep a reference to the token ID.
-                tokenIds[_i] = _generateTokenId(
-                    _tierId,
-                    _storedTier.initialQuantity - --_storedTier.remainingQuantity
-                        + numberOfBurnedFor[msg.sender][_tierId]
-                );
+            // Make sure there are enough NFTs available to mint.
+            if (storedTier.remainingSupply <= _numberOfPendingReservesFor(msg.sender, tierId, storedTier)) {
+                revert INSUFFICIENT_SUPPLY_REMAINING();
             }
 
-            // Update the leftover amount;
+            // Mint the NFT.
             unchecked {
-                leftoverAmount = leftoverAmount - _storedTier.price;
-                ++_i;
+                // Keep a reference to its token ID.
+                tokenIds[i] = _generateTokenId(
+                    tierId,
+                    storedTier.initialSupply - --storedTier.remainingSupply + numberOfBurnedFor[msg.sender][tierId]
+                );
+                leftoverAmount = leftoverAmount - storedTier.price;
             }
         }
     }
 
-    /// @notice Records token burns.
-    /// @param _tokenIds The IDs of the tokens being burned.
-    function recordBurn(uint256[] calldata _tokenIds) external override {
+    /// @notice Records NFT burns.
+    /// @param tokenIds The token IDs of the NFTs to burn.
+    function recordBurn(uint256[] calldata tokenIds) external override {
         // Get a reference to the number of token IDs provided.
-        uint256 _numberOfTokenIds = _tokenIds.length;
+        uint256 numberOfTokenIds = tokenIds.length;
 
         // Keep a reference to the token ID being iterated on.
-        uint256 _tokenId;
+        uint256 tokenId;
 
-        // Iterate through all tokens to increment the burn count.
-        for (uint256 _i; _i < _numberOfTokenIds;) {
-            // Set the token's ID.
-            _tokenId = _tokenIds[_i];
+        // Iterate through all token IDs to increment the burn count.
+        for (uint256 i; i < numberOfTokenIds; i++) {
+            // Set the NFT's token ID.
+            tokenId = tokenIds[i];
 
-            uint256 _tierId = tierIdOfToken(_tokenId);
+            uint256 tierId = tierIdOfToken(tokenId);
 
-            // Increment the number burned for the tier.
-            numberOfBurnedFor[msg.sender][_tierId]++;
+            // Increment the number of NFTs burned from the tier.
+            numberOfBurnedFor[msg.sender][tierId]++;
 
-            _storedTierOf[msg.sender][_tierId].remainingQuantity++;
-
-            unchecked {
-                ++_i;
-            }
+            // Increment the remaining supply of the tier.
+            _storedTierOf[msg.sender][tierId].remainingSupply++;
         }
     }
 
-    /// @notice Sets the token URI resolver.
-    /// @param _resolver The resolver to set.
-    function recordSetTokenUriResolver(IJB721TokenUriResolver _resolver) external override {
-        tokenUriResolverOf[msg.sender] = _resolver;
+    /// @notice Record a newly set token URI resolver.
+    /// @param resolver The resolver to set.
+    function recordSetTokenUriResolver(IJB721TokenUriResolver resolver) external override {
+        tokenUriResolverOf[msg.sender] = resolver;
     }
 
-    /// @notice Sets the encoded IPFS URI of a tier.
-    /// @param _tierId The tier ID to set the encoded IPFS URI of.
-    /// @param _encodedIPFSUri The encoded IPFS URI to set.
-    function recordSetEncodedIPFSUriOf(uint256 _tierId, bytes32 _encodedIPFSUri) external override {
-        encodedIPFSUriOf[msg.sender][_tierId] = _encodedIPFSUri;
+    /// @notice Record a new encoded IPFS URI for a tier.
+    /// @param tierId The ID of the tier to set the encoded IPFS URI of.
+    /// @param encodedIPFSUri The encoded IPFS URI to set for the tier.
+    function recordSetEncodedIPFSUriOf(uint256 tierId, bytes32 encodedIPFSUri) external override {
+        encodedIPFSUriOf[msg.sender][tierId] = encodedIPFSUri;
     }
 
-    /// @notice Sets flags.
-    /// @param _flags The flags to set.
-    function recordFlags(JBTiered721Flags calldata _flags) external override {
-        _flagsOf[msg.sender] = _flags;
+    /// @notice Record newly set flags.
+    /// @param flags The flags to set.
+    function recordFlags(JB721TiersHookFlags calldata flags) external override {
+        _flagsOf[msg.sender] = flags;
     }
 
-    /// @notice Removes an NFT contract's removed tiers from sequencing.
-    /// @param _nft The NFT contract to clean tiers for.
-    function cleanTiers(address _nft) external override {
+    /// @notice Cleans an NFT contract's removed tiers from the tier sorting sequence.
+    /// @param nft The NFT contract to clean tiers for.
+    function cleanTiers(address nft) external override {
         // Keep a reference to the last tier ID.
-        uint256 _lastSortedTierId = _lastSortedTierIdOf(_nft);
+        uint256 lastSortedTierId = _lastSortedTierIdOf(nft);
 
         // Get a reference to the tier ID being iterated on, starting with the starting tier ID.
-        uint256 _currentSortedTierId = _firstSortedTierIdOf(_nft, 0);
+        uint256 currentSortedTierId = _firstSortedTierIdOf(nft, 0);
 
         // Keep track of the previous non-removed tier ID.
-        uint256 _previous;
+        uint256 previousSortedTierId;
 
-        // Initialize a BitmapWord for isRemoved.
-        JBBitmapWord memory _bitmapWord;
+        // Initialize a `JBBitmapWord` for tracking removed tiers.
+        JBBitmapWord memory bitmapWord;
 
         // Make the sorted array.
-        while (_currentSortedTierId != 0) {
-            if (!_isTierRemovedWithRefresh(_nft, _currentSortedTierId, _bitmapWord)) {
-                // If the current tier ID being iterated on isn't an increment of the previous, set the correct tier after if needed.
-                if (_currentSortedTierId != _previous + 1) {
-                    if (_tierIdAfter[_nft][_previous] != _currentSortedTierId) {
-                        _tierIdAfter[_nft][_previous] = _currentSortedTierId;
+        while (currentSortedTierId != 0) {
+            // If the current tier ID being iterated on isn't an increment of the previous one,
+            if (!_isTierRemovedWithRefresh(nft, currentSortedTierId, bitmapWord)) {
+                // Update its `_tierIdAfter` if needed.
+                if (currentSortedTierId != previousSortedTierId + 1) {
+                    if (_tierIdAfter[nft][previousSortedTierId] != currentSortedTierId) {
+                        _tierIdAfter[nft][previousSortedTierId] = currentSortedTierId;
                     }
-                    // Otherwise if the current tier ID is an increment of the previous and the tier ID after isn't 0, set it to 0.
-                } else if (_tierIdAfter[_nft][_previous] != 0) {
-                    _tierIdAfter[_nft][_previous] = 0;
+                    // Otherwise, if the current tier ID IS an increment of the previous one,
+                    // AND the tier ID after it isn't 0,
+                } else if (_tierIdAfter[nft][previousSortedTierId] != 0) {
+                    // Set its `_tierIdAfter` to 0.
+                    _tierIdAfter[nft][previousSortedTierId] = 0;
                 }
 
-                // Set the previous tier ID to be the current tier ID.
-                _previous = _currentSortedTierId;
+                // Iterate by setting the previous tier ID for the next loop to the current tier ID.
+                previousSortedTierId = currentSortedTierId;
             }
-            // Set the next sorted tier ID.
-            _currentSortedTierId = _nextSortedTierIdOf(_nft, _currentSortedTierId, _lastSortedTierId);
+            // Iterate by updating the current sorted tier ID to the next sorted tier ID.
+            currentSortedTierId = _nextSortedTierIdOf(nft, currentSortedTierId, lastSortedTierId);
         }
 
-        emit CleanTiers(_nft, msg.sender);
+        emit CleanTiers(nft, msg.sender);
     }
 
     //*********************************************************************//
     // ------------------------ internal functions ----------------------- //
     //*********************************************************************//
 
-    /// @notice Returns a tier given a provided stored tier.
-    /// @param _nft The NFT contract to get the tier from.
-    /// @param _tierId The tier ID of the tier to get.
-    /// @param _storedTier The stored tier to base the tier on.
-    /// @param _includeResolvedUri If true, if there's a token URI resolver, the content will be resolved and included.
-    /// @return tier The tier object.
-    function _getTierFrom(address _nft, uint256 _tierId, JBStored721Tier memory _storedTier, bool _includeResolvedUri)
+    /// @notice Returns the tier corresponding to the stored tier provided.
+    /// @dev Translate `JBStored721Tier` to `JB721Tier`.
+    /// @param nft The NFT contract to get the tier from.
+    /// @param tierId The ID of the tier to get.
+    /// @param storedTier The stored tier to get the corresponding tier for.
+    /// @param includeResolvedUri If set to `true`, if the contract has a token URI resolver, its content will be
+    /// resolved and included.
+    /// @return tier The tier as a `JB721Tier` struct.
+    function _getTierFrom(
+        address nft,
+        uint256 tierId,
+        JBStored721Tier memory storedTier,
+        bool includeResolvedUri
+    )
         internal
         view
         returns (JB721Tier memory)
     {
-        // Get a reference to the reserved token beneficiary.
-        address _reservedTokenBeneficiary = reservedTokenBeneficiaryOf(_nft, _tierId);
+        // Get a reference to the reserve beneficiary.
+        address reserveBeneficiary = reserveBeneficiaryOf(nft, tierId);
 
-        (bool _allowManualMint, bool _transfersPausable, bool _useVotingUnits) = _unpackBools(_storedTier.packedBools);
+        (bool allowOwnerMint, bool transfersPausable, bool useVotingUnits) = _unpackBools(storedTier.packedBools);
 
         return JB721Tier({
-            id: _tierId,
-            price: _storedTier.price,
-            remainingQuantity: _storedTier.remainingQuantity,
-            initialQuantity: _storedTier.initialQuantity,
-            votingUnits: _useVotingUnits ? _storedTier.votingUnits : _storedTier.price,
-            // No reserved rate if no beneficiary set.
-            reservedRate: _reservedTokenBeneficiary == address(0) ? 0 : _storedTier.reservedRate,
-            reservedTokenBeneficiary: _reservedTokenBeneficiary,
-            encodedIPFSUri: encodedIPFSUriOf[_nft][_tierId],
-            category: _storedTier.category,
-            allowManualMint: _allowManualMint,
-            transfersPausable: _transfersPausable,
-            resolvedUri: !_includeResolvedUri || tokenUriResolverOf[_nft] == IJB721TokenUriResolver(address(0))
+            id: tierId,
+            price: storedTier.price,
+            remainingSupply: storedTier.remainingSupply,
+            initialSupply: storedTier.initialSupply,
+            votingUnits: useVotingUnits ? storedTier.votingUnits : storedTier.price,
+            // No reserve frequency if there is no reserve beneficiary.
+            reserveFrequency: reserveBeneficiary == address(0) ? 0 : storedTier.reserveFrequency,
+            reserveBeneficiary: reserveBeneficiary,
+            encodedIPFSUri: encodedIPFSUriOf[nft][tierId],
+            category: storedTier.category,
+            allowOwnerMint: allowOwnerMint,
+            transfersPausable: transfersPausable,
+            resolvedUri: !includeResolvedUri || tokenUriResolverOf[nft] == IJB721TokenUriResolver(address(0))
                 ? ""
-                : tokenUriResolverOf[_nft].tokenUriOf(_nft, _generateTokenId(_tierId, 0))
+                : tokenUriResolverOf[nft].tokenUriOf(nft, _generateTokenId(tierId, 0))
         });
     }
 
-    /// @notice Check if a tier is removed from the current set of tiers, while reusing a bitmap word.
-    /// @param _nft The NFT contract on which to check if the tier is removed.
-    /// @param _tierId The tier ID to check for removal.
-    /// @param _bitmapWord The bitmap word to reuse.
-    /// @return True if the tier has been removed.
-    function _isTierRemovedWithRefresh(address _nft, uint256 _tierId, JBBitmapWord memory _bitmapWord)
+    /// @notice Check whether a tier has been removed while refreshing the relevant bitmap word if needed.
+    /// @param nft The NFT contract to check for removals on.
+    /// @param tierId The ID of the tier to check the removal status of.
+    /// @param bitmapWord The bitmap word to use.
+    /// @return A boolean which is `true` if the tier has been removed.
+    function _isTierRemovedWithRefresh(
+        address nft,
+        uint256 tierId,
+        JBBitmapWord memory bitmapWord
+    )
         internal
         view
         returns (bool)
     {
-        // Reset the bitmap if the current tier ID is outside the currently stored word.
-        if (_bitmapWord.refreshBitmapNeeded(_tierId) || (_bitmapWord.currentWord == 0 && _bitmapWord.currentDepth == 0))
-        {
-            _bitmapWord = _isTierRemovedBitmapWord[_nft].readId(_tierId);
+        // If the current tier ID is outside current bitmap word (depth), refresh the bitmap word.
+        if (bitmapWord.refreshBitmapNeeded(tierId) || (bitmapWord.currentWord == 0 && bitmapWord.currentDepth == 0)) {
+            bitmapWord = _removedTiersBitmapWordOf[nft].readId(tierId);
         }
 
-        return _bitmapWord.isTierIdRemoved(_tierId);
+        return bitmapWord.isTierIdRemoved(tierId);
     }
 
-    /// @notice The number of mintable reserved tokens within the provided tier.
-    /// @param _nft The NFT contract to check mintable reserved tokens on.
-    /// @param _tierId The tier ID to check the number of mintable reserved tokens for.
-    /// @param _storedTier The stored tier to get the number of mintable reserved tokens for.
-    /// @return numberReservedTokensOutstanding The number of outstanding mintable reserved tokens within the tier.
-    function _numberOfReservedTokensOutstandingFor(address _nft, uint256 _tierId, JBStored721Tier memory _storedTier)
+    /// @notice Get the number of pending reserve NFTs for the specified tier ID.
+    /// @param nft The NFT contract that the tier belongs to.
+    /// @param tierId The ID of the tier to get the number of pending reserve NFTs for.
+    /// @param storedTier The stored tier to get the number of pending reserve NFTs for.
+    /// @return numberReservedTokensOutstanding The number of pending reserve NFTs for the tier.
+    function _numberOfPendingReservesFor(
+        address nft,
+        uint256 tierId,
+        JBStored721Tier memory storedTier
+    )
         internal
         view
         returns (uint256)
     {
-        // No reserves outstanding if no mints, no reserved rate, or no beneficiary.
+        // No pending reserves if no mints, no reserve frequency, or no reserve beneficiary.
         if (
-            _storedTier.reservedRate == 0 || _storedTier.initialQuantity == _storedTier.remainingQuantity
-                || reservedTokenBeneficiaryOf(_nft, _tierId) == address(0) 
+            storedTier.reserveFrequency == 0 || storedTier.initialSupply == storedTier.remainingSupply
+                || reserveBeneficiaryOf(nft, tierId) == address(0)
         ) return 0;
 
-        // The number of reserved tokens of the tier already minted.
-        uint256 _reserveTokensMinted = numberOfReservesMintedFor[_nft][_tierId];
+        // The number of reserve NFTs which have already been minted from the tier.
+        uint256 numberOfReserveMints = numberOfReservesMintedFor[nft][tierId];
 
-        // If only the reserved token (from the rounding up) has been minted so far, return 0.
-        if (_storedTier.initialQuantity - _reserveTokensMinted == _storedTier.remainingQuantity) {
+        // If only the reserved NFT (from rounding up) has been minted so far, return 0.
+        if (storedTier.initialSupply - numberOfReserveMints == storedTier.remainingSupply) {
             return 0;
         }
 
-        // Get a reference to the number of tokens already minted in the tier, not counting reserves or burned tokens.
-        // Take into account the reserved tokens into the remaining ones
-        uint256 _numberOfNonReservesMinted;
+        // Get a reference to the number of NFTs minted from the tier (not counting reserve mints or burned tokens).
+        uint256 numberOfNonReserveMints;
         unchecked {
-            _numberOfNonReservesMinted =
-                _storedTier.initialQuantity - _storedTier.remainingQuantity - _reserveTokensMinted;
+            numberOfNonReserveMints = storedTier.initialSupply - storedTier.remainingSupply - numberOfReserveMints;
         }
 
-        // Get the number of reserved tokens mintable given the number of non reserved tokens minted. This will round down.
-        uint256 _numberReservedTokensMintable = _numberOfNonReservesMinted / _storedTier.reservedRate;
+        // Get the number of total available reserve NFT mints given the number of non-reserve NFTs minted divided by
+        // the reserve frequency. This will round down.
+        uint256 totalNumberOfAvailableReserveMints = numberOfNonReserveMints / storedTier.reserveFrequency;
 
         // Round up.
-        if (_numberOfNonReservesMinted % _storedTier.reservedRate > 0) ++_numberReservedTokensMintable;
+        if (numberOfNonReserveMints % storedTier.reserveFrequency > 0) ++totalNumberOfAvailableReserveMints;
 
-        // Fill out the remaining supply with reserved tokens if needed.
-        if ((_storedTier.initialQuantity % _storedTier.reservedRate) + _numberReservedTokensMintable > _storedTier.initialQuantity) {
-            _numberReservedTokensMintable = _storedTier.remainingQuantity; 
+        // Fill out the remaining supply with reserve NFTs if needed.
+        if (
+            (storedTier.initialSupply % storedTier.reserveFrequency) + totalNumberOfAvailableReserveMints
+                > storedTier.initialSupply
+        ) {
+            totalNumberOfAvailableReserveMints = storedTier.remainingSupply;
         }
 
-        // Make sure there are more mintable than have been minted. This is possible if some tokens have been burned.
-        if (_reserveTokensMinted > _numberReservedTokensMintable) return 0;
+        // Make sure there are more available reserve mints than actual reserve mints.
+        // This condition becomes possible if some NFTs have been burned.
+        if (numberOfReserveMints > totalNumberOfAvailableReserveMints) return 0;
 
-        // Return the difference between the amount mintable and the amount already minted.
+        // Return the difference between the number of available reserve mints and the amount already minted.
         unchecked {
-            return _numberReservedTokensMintable - _reserveTokensMinted;
+            return totalNumberOfAvailableReserveMints - numberOfReserveMints;
         }
     }
 
-    /// @notice Finds the token ID given a tier ID and a token number within that tier.
-    /// @param _tierId The ID of the tier to generate an ID for.
-    /// @param _tokenNumber The number of the token in the tier.
-    /// @return The ID of the token.
-    function _generateTokenId(uint256 _tierId, uint256 _tokenNumber) internal pure returns (uint256) {
-        return (_tierId * _ONE_BILLION) + _tokenNumber;
+    /// @notice Generate a token ID for an NFT given a tier ID and a token number within that tier.
+    /// @param tierId The ID of the tier to generate a token ID for.
+    /// @param tokenNumber The token number of the NFT within the tier.
+    /// @return The token ID of the NFT.
+    function _generateTokenId(uint256 tierId, uint256 tokenNumber) internal pure returns (uint256) {
+        return (tierId * _ONE_BILLION) + tokenNumber;
     }
 
-    /// @notice The next sorted tier ID.
-    /// @param _nft The NFT contract for which the sorted tier ID applies.
-    /// @param _id The ID relative to which the next sorted ID will be returned.
-    /// @param _max The maximum possible ID.
-    /// @return The ID.
-    function _nextSortedTierIdOf(address _nft, uint256 _id, uint256 _max) internal view returns (uint256) {
-        // If this is the last tier, return zero.
-        if (_id == _max) return 0;
+    /// @notice Get the tier ID which comes after the provided one when sorted by price.
+    /// @param nft The NFT contract to get the next sorted tier ID from.
+    /// @param id The tier ID to get the next sorted tier ID relative to.
+    /// @param max The maximum tier ID.
+    /// @return The next sorted tier ID.
+    function _nextSortedTierIdOf(address nft, uint256 id, uint256 max) internal view returns (uint256) {
+        // If this is the last tier (maximum), return zero.
+        if (id == max) return 0;
 
-        // Update the current tier ID to be the one saved to be after, if it exists.
-        uint256 _storedNext = _tierIdAfter[_nft][_id];
+        // If a tier ID is saved to come after the provided ID, return it.
+        uint256 storedNext = _tierIdAfter[nft][id];
 
-        if (_storedNext != 0) return _storedNext;
+        if (storedNext != 0) return storedNext;
 
-        // Otherwise increment the current.
-        return _id + 1;
+        // Otherwise, increment the provided tier ID.
+        return id + 1;
     }
 
-    /// @notice The first sorted tier ID of an NFT contract.
-    /// @param _nft The NFT contract to get the first sorted tier ID of.
-    /// @param _category The category to get the first sorted tier ID of. Send 0 for the first overall sorted ID, which might not be of the 0 category if there isn't a tier of the 0 category.
-    /// @return id The first sorted tier ID.
-    function _firstSortedTierIdOf(address _nft, uint256 _category) internal view returns (uint256 id) {
-        id = _category == 0 ? _tierIdAfter[_nft][0] : _startingTierIdOfCategory[_nft][_category];
+    /// @notice Get the first tier ID from an NFT contract (when sorted by price) within a provided category.
+    /// @param nft The NFT contract to get the first sorted tier ID of.
+    /// @param category The category to get the first sorted tier ID within. Send 0 for the first ID across all tiers,
+    /// which might not be in the 0th category if the 0th category does not exist.
+    /// @return id The first sorted tier ID within the provided category.
+    function _firstSortedTierIdOf(address nft, uint256 category) internal view returns (uint256 id) {
+        id = category == 0 ? _tierIdAfter[nft][0] : _startingTierIdOfCategory[nft][category];
         // Start at the first tier ID if nothing is specified.
         if (id == 0) id = 1;
     }
 
-    /// @notice The last sorted tier ID of an NFT.
-    /// @param _nft The NFT contract to get the last sorted tier ID of.
+    /// @notice The last sorted tier ID from an NFT contract (when sorted by price).
+    /// @param nft The NFT contract to get the last sorted tier ID of.
     /// @return id The last sorted tier ID.
-    function _lastSortedTierIdOf(address _nft) internal view returns (uint256 id) {
-        id = _trackedLastSortTierIdOf[_nft];
-        // Start at the first ID if nothing is specified.
-        if (id == 0) id = maxTierIdOf[_nft];
+    function _lastSortedTierIdOf(address nft) internal view returns (uint256 id) {
+        id = _lastTrackedSortedTierIdOf[nft];
+        // Use the maximum tier ID if nothing is specified.
+        if (id == 0) id = maxTierIdOf[nft];
     }
 
     /// @notice Pack three bools into a single uint8.
-    /// @param _allowManualMint Whether or not manual mints are allowed.
-    /// @param _transfersPausable Whether or not transfers are pausable.
-    /// @param _useVotingUnits A flag indicating whether the voting units override should be used.
-    /// @return _packed The packed bools.
-    function _packBools(bool _allowManualMint, bool _transfersPausable, bool _useVotingUnits)
+    /// @param allowOwnerMint Whether or not owner minting is allowed in new tiers.
+    /// @param transfersPausable Whether or not NFT transfers can be paused.
+    /// @param useVotingUnits Whether or not custom voting unit amounts are allowed in new tiers.
+    /// @return packed The packed bools.
+    function _packBools(
+        bool allowOwnerMint,
+        bool transfersPausable,
+        bool useVotingUnits
+    )
         internal
         pure
-        returns (uint8 _packed)
+        returns (uint8 packed)
     {
         assembly {
-            _packed := or(_allowManualMint, _packed)
-            _packed := or(shl(0x1, _transfersPausable), _packed)
-            _packed := or(shl(0x2, _useVotingUnits), _packed)
+            packed := or(allowOwnerMint, packed)
+            packed := or(shl(0x1, transfersPausable), packed)
+            packed := or(shl(0x2, useVotingUnits), packed)
         }
     }
 
     /// @notice Unpack three bools from a single uint8.
-    /// @param _packed The packed bools.
-    /// @return _allowManualMint Whether or not manual mints are allowed.
-    /// @return _transfersPausable Whether or not transfers are pausable.
-    /// @return _useVotingUnits A flag indicating whether the voting units override should be used.
-    function _unpackBools(uint8 _packed)
+    /// @param packed The packed bools.
+    /// @param allowOwnerMint Whether or not owner minting is allowed in new tiers.
+    /// @param transfersPausable Whether or not NFT transfers can be paused.
+    /// @param useVotingUnits Whether or not custom voting unit amounts are allowed in new tiers.
+    function _unpackBools(uint8 packed)
         internal
         pure
-        returns (bool _allowManualMint, bool _transfersPausable, bool _useVotingUnits)
+        returns (bool allowOwnerMint, bool transfersPausable, bool useVotingUnits)
     {
         assembly {
-            _allowManualMint := iszero(iszero(and(0x1, _packed)))
-            _transfersPausable := iszero(iszero(and(0x2, _packed)))
-            _useVotingUnits := iszero(iszero(and(0x4, _packed)))
+            allowOwnerMint := iszero(iszero(and(0x1, packed)))
+            transfersPausable := iszero(iszero(and(0x2, packed)))
+            useVotingUnits := iszero(iszero(and(0x4, packed)))
         }
     }
 }

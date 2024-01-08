@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBPrices.sol";
-import "./JB721TierParams.sol";
+import "lib/juice-contracts-v4/src/interfaces/IJBPrices.sol";
+import "./JB721TierConfig.sol";
 
-/// @custom:member tiers The tiers to set.
-/// @custom:member currency The currency that the tier contribution floors are denoted in.
-/// @custom:member decimals The number of decimals included in the tier contribution floor fixed point numbers.
-/// @custom:member prices A contract that exposes price feeds that can be used to resolved the value of a contributions that are sent in different currencies. Set to the zero address if payments must be made in `currency`.
-struct JB721PricingParams {
-    JB721TierParams[] tiers;
+/// @notice Config to initialize a `JB721TiersHook` with tiers and price data.
+/// @dev The `tiers` must be sorted by price (from least to greatest).
+/// @custom:member tiers The tiers to initialize the hook with.
+/// @custom:member currency The currency that the tier prices are denoted in. See `JBPrices`.
+/// @custom:member decimals The number of decimals in the fixed point tier prices.
+/// @custom:member prices A contract that exposes price feeds that can be used to calculate prices in different
+/// currencies. To only accept payments in `currency`, set `prices` to the zero address. See `JBPrices`.
+struct JB721InitTiersConfig {
+    JB721TierConfig[] tiers;
     uint48 currency;
     uint48 decimals;
     IJBPrices prices;

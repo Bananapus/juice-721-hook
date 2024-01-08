@@ -1,27 +1,34 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/// @custom:member price The minimum contribution to qualify for this tier.
-/// @custom:member initialQuantity The initial `remainingAllowance` value when the tier was set.
-/// @custom:member votingUnits The amount of voting significance to give this tier compared to others.
-/// @custom:member reservedRate The number of minted tokens needed in the tier to allow for minting another reserved token.
-/// @custom:member reservedRateBeneficiary The beneificary of the reserved tokens for this tier.
-/// @custom:member encodedIPFSUri The URI to use for each token within the tier.
-/// @custom:member category A category to group NFT tiers by.
-/// @custom:member allowManualMint A flag indicating if the contract's owner can mint from this tier on demand.
-/// @custom:member shouldUseReservedRateBeneficiaryAsDefault A flag indicating if the `reservedTokenBeneficiary` should be stored as the default beneficiary for all tiers.
-/// @custom:member transfersPausable A flag indicating if transfers from this tier can be pausable. 
-/// @custom:member useVotingUnits A flag indicating if the voting units override should be used over the price as the tier's voting units.
-struct JB721TierParams {
+/// @notice Config for a single NFT tier within a `JB721TiersHook`.
+/// @custom:member price The price to buy an NFT in this tier, in terms of the currency in its `JBInitTiersConfig`.
+/// @custom:member initialSupply The total number of NFTs which can be minted from this tier.
+/// @custom:member votingUnits The number of votes that each NFT in this tier gets if `useVotingUnits` is true.
+/// @custom:member reserveFrequency The frequency at which an extra NFT is minted for the `reserveBeneficiary` from this
+/// tier. With a `reserveFrequency` of 5, an extra NFT will be minted for the `reserveBeneficiary` for every 5 NFTs
+/// purchased.
+/// @custom:member reserveBeneficiary The address which receives any reserve NFTs from this tier. Overrides the default
+/// reserve beneficiary if one is set.
+/// @custom:member encodedIPFSUri The IPFS URI to use for each NFT in this tier.
+/// @custom:member category The category that NFTs in this tier belongs to. Used to group NFT tiers.
+/// @custom:member allowOwnerMint A boolean indicating whether the contract's owner can mint NFTs from this tier
+/// on-demand.
+/// @custom:member useReserveBeneficiaryAsDefault A boolean indicating whether this tier's `reserveBeneficiary` should
+/// be stored as the default beneficiary for all tiers.
+/// @custom:member transfersPausable A boolean indicating whether transfers for NFTs in tier can be paused.
+/// @custom:member useVotingUnits A boolean indicating whether the `votingUnits` should be used to calculate voting
+/// power. If `useVotingUnits` is false, voting power is based on the tier's price.
+struct JB721TierConfig {
     uint104 price;
-    uint32 initialQuantity;
+    uint32 initialSupply;
     uint32 votingUnits;
-    uint16 reservedRate;
-    address reservedTokenBeneficiary;
+    uint16 reserveFrequency;
+    address reserveBeneficiary;
     bytes32 encodedIPFSUri;
     uint24 category;
-    bool allowManualMint;
-    bool shouldUseReservedTokenBeneficiaryAsDefault;
+    bool allowOwnerMint;
+    bool useReserveBeneficiaryAsDefault;
     bool transfersPausable;
     bool useVotingUnits;
 }

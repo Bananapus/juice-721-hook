@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/// @custom:member price The minimum contribution to qualify for this tier.
-/// @custom:member remainingQuantity Remaining number of tokens in this tier. Together with idCeiling this enables for consecutive, increasing token ids to be issued to contributors.
-/// @custom:member initialQuantity The initial `remainingAllowance` value when the tier was set.
-/// @custom:member votingUnits The amount of voting significance to give this tier compared to others.
-/// @custom:member category A category to group NFT tiers by.
-/// @custom:member reservedRate The number of minted tokens needed in the tier to allow for minting another reserved token.
-/// @custom:member allowManualMint A flag indicating if the contract's owner can mint from this tier on demand.
-/// @custom:member transfersPausable A flag indicating if transfers from this tier can be pausable. 
-/// @custom:member useVotingUnits A flag indicating if the voting units override should be used over the price as the tier's voting units.
+/// @custom:member price The price to buy an NFT in this tier, in terms of the currency in its `JBInitTiersConfig`.
+/// @custom:member remainingSupply The remaining number of NFTs which can be minted from this tier.
+/// @custom:member initialSupply The total number of NFTs which can be minted from this tier.
+/// @custom:member votingUnits The number of votes that each NFT in this tier gets.
+/// @custom:member category The category that NFTs in this tier belongs to. Used to group NFT tiers.
+/// @custom:member reserveFrequency The frequency at which an extra NFT is minted for the `reserveBeneficiary` from this
+/// tier. With a `reserveFrequency` of 5, an extra NFT will be minted for the `reserveBeneficiary` for every 5 NFTs
+/// purchased.
+/// @custom:member allowOwnerMint A boolean indicating whether the contract's owner can mint NFTs from this tier
+/// on-demand.
+/// @custom:member transfersPausable A boolean indicating whether transfers for NFTs in tier can be paused.
+/// @custom:member useVotingUnits A boolean indicating whether the `votingUnits` should be used to calculate voting
+/// power. If `useVotingUnits` is false, voting power is based on the tier's price.
 struct JBStored721Tier {
     uint104 price;
-    uint32 remainingQuantity;
-    uint32 initialQuantity;
+    uint32 remainingSupply;
+    uint32 initialSupply;
     uint40 votingUnits;
     uint24 category;
-    uint16 reservedRate;
+    uint16 reserveFrequency;
     uint8 packedBools;
 }

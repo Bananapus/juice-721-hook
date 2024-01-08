@@ -1,119 +1,94 @@
-# Juicebox Delegated 721 Distribution Mechanism
+# Juicebox NFT Hook
 
-## Motivation
+Juicebox projects can use an NFT hook to sell tiered NFTs (ERC-721s) with different prices and artwork. When the project is paid, the hook may mint NFTs to the payer, depending on the hook's setup, the amount paid, and information specified by the payer. The project's owner can enable NFT redemptions through this hook, allowing holders to burn their NFTs to reclaim funds from the project (in proportion to the NFT's price).
 
-If included in a project's funding cycle, a 721 Delegate can provide utility or incentive for contributors to participate.
+*If you're having trouble understanding this contract, take a look at the [core Juicebox contracts](https://github.com/bananapus/juice-contracts-v4) and the [documentation](https://docs.juicebox.money/) first. If you have questions, reach out on [Discord](https://discord.com/invite/ErQYmth4dS).*
 
-## Mechanic
+## Develop
 
-Within one collection, NFTs can be minted within any number of pre-programmed tiers.
-
-Each tier has the following optional properties:
-
-- a price.
-- a max quantity.
-- optionally, a number of voting units to associate with each unit within the tier, with onchain historical records.
-- optionally, a reserved rate allowing a proportion of units within the tier to be minted to a pre-programmed beneficiary.
-- a token URI, overridable by a URI resolver that can return dynamic values for each unit with the tier.
-- a category, so tiers can be organized and accessed for different purposes.
-- optionally, the ability for the contract's owner to mint tokens from the tier on demand.
-- if the tokens within the tier can have transfers paused on a per-funding-cycle basis, or if they must always remain transferable.
-- a few additional flags that restrict future tier additions to the collection.
-
-New tiers can be added, so long as they respect the contract's `flags` that specify if new tiers can influence voting units, reserved quantities, or be manually minted.
-
-Tiers can also be removed, so long as they are not locked.
-
-An incoming payment can specify any number of tiers to mint as part of the payment, so long as the sum of the tier's prices are contained within the paid amount. If specific tiers aren't specified, the best available tier will be minted based on the specified floor amount, unless a flag is specifically sent along with the payment telling the contract to not mint.
-
-If a tier's price is specified in a currency different to the incoming payment, a `JBPrices` contract will by used for trying to normalize the values.
-
-If a payment received does not meet a price threshold or is in excess of the minted tiers, the balance is stored as a credit which will be added to future payments and applied to mints at that time. A flag can also be passed to avoid accepting payments that aren't applied to mints in full.
-
-The contract's owner can mint on demand from tier's that have been pre-programmed to allow manual token minting.
-
-The NFTs from each tier can also be used for redemptions against the underlying Juicebox treasury. The rate of redemptions corresponds to the price floor of the tier being redeemed, compared to the total price floors of all minted NFTs. Fungible project tokens cannot be being redeemed at the same time. In order to activate NFT redemptions, turn on the `shouldUseDataSourceForRedeem` metadata flag of your next funding cycle.
-
-The NFTs can serve as utilities for on-chain governance if specified during the collection's deployment.
-
-## Architecture
-
-An understanding of how the Juicebox protocol's pay and redeem functionality works is an important prereq to understanding how this repo's contracts work and attach themselves to Juicebox's regular operating behavior. This contract specifically makes use of the DataSource+Delegate pattern. See https://info.juicebox.money/dev/.
-
-In order to use a 721 delegate, a Juicebox project should be launched from `JBTiered721DelegateProjectDeployer` instead of a `JBController`. This Deployer will deploy a `JBTiered721Delegate` (through it's reference to a `JBTiered721DelegateDeployer`) and attach it to the first funding cycle of the newly launched project as a DataSource and Delegate. Funding cycle reconfigurations can also be done using the `JBTiered721DelegateProjectDeployer`, though it will need to have Operator permissions from the project's owner.
-
-The abstract `JB721Delegate` implementation of the ERC721 Juicebox DataSource+Delegate extension can be used for any distribution mechanic. This repo includes one implementation – the `JBTiered721Delegate` – as well as an extensions that offer on-chain governance capabilities to the distributed tokens. 
-
-All `JBTiered721Delegate`'s use a generic `JBTiered721DelegateStore` to store it's data.
-
-The pay metadata structure is as follows:
-bytes32: ignored
-bytes32: ignored
-bytes4: send 0xf8b169f8 if the behavior from this delegate is expected to be triggered.
-bool: A flag indicating if the transaction should be allowed to proceed even if more funds are being paid than the specified NFTs cost.
-uint16[]: A list of tier IDs to mint from.
-
-## Deploy
-
-The deployer copies the data of a pre-existing cononical version of the 721 contracts, which can be either GlobalGovernance, TierGovernance, or no governance. This was done to keep the deployer contract size small enough to be deployable, without the extra cost of the delegatecalls associated with a proxy pattern. 
-
-
-# Install
-
-Quick all-in-one command:
-
-```bash
-rm -Rf juice-721-delegate || true && git clone -n https://github.com/jbx-protocol/juice-721-delegate && cd juice-721-delegate && git pull origin f9893b1497098241dd3a664956d8016ff0d0efd0 && git checkout FETCH_HEAD && foundryup && git submodule update --init --recursive --force && yarn install && forge test --gas-report
-```
-
-To get set up:
-
-1. Install [Foundry](https://github.com/gakonst/foundry).
+`juice-nft-hook` uses the [Foundry](https://github.com/foundry-rs/foundry) development toolchain for builds, tests, and deployments. To get set up, install [Foundry](https://github.com/foundry-rs/foundry):
 
 ```bash
 curl -L https://foundry.paradigm.xyz | sh
 ```
 
-2. Install external lib(s)
+You can download and install dependencies with:
 
 ```bash
-yarn install
+forge install
 ```
 
-then run
+If you run into trouble with `forge install`, try using `git submodule update --init --recursive` to ensure that nested submodules have been properly initialized.
+
+Some useful commands:
+
+| Command               | Description                                         |
+| --------------------- | --------------------------------------------------- |
+| `forge install`       | Install the dependencies.                           |
+| `forge build`         | Compile the contracts and write artifacts to `out`. |
+| `forge fmt`           | Lint.                                               |
+| `forge test`          | Run the tests.                                      |
+| `forge build --sizes` | Get contract sizes.                                 |
+| `forge coverage`      | Generate a test coverage report.                    |
+| `foundryup`           | Update foundry. Run this periodically.              |
+| `forge clean`         | Remove the build artifacts and cache directories.   |
+
+To learn more, visit the [Foundry Book](https://book.getfoundry.sh/) docs.
+
+We recommend using [Juan Blanco's solidity extension](https://marketplace.visualstudio.com/items?itemName=JuanBlanco.solidity) for VSCode.
+
+## Utilities
+
+For convenience, several utility commands are available in `util.sh`. To see a list, run:
 
 ```bash
-forge update
+`bash util.sh --help`.
 ```
 
-3. Run tests:
+Or make the script executable and run:
 
 ```bash
-forge test
+./util.sh --help
 ```
 
-4. Update Foundry periodically:
+## Hooks
 
-```bash
-foundryup
-```
+This contract is a *data hook*, a *pay hook*, and a *redeem hook*. Data hooks receive information about a payment or a redemption, and put together a payload for the pay/redeem hook to execute.
 
-#### Setup
+Juicebox projects can specify a data hook in their `JBRulesetMetadata`. When someone attempts to pay or redeem from the project, the project's terminal records the payment in the terminal store, passing information about the payment/redemption to the data hook in the process. The data hook responds with a list of payloads – each payload specifies the address of a pay/redeem hook, as well as some custom data and an amount of funds to send to that pay/redeem hook.
 
-Configure the .env variables, and add a mnemonic.txt file with the mnemonic of the deployer wallet. The sender address in the .env must correspond to the mnemonic account.
+Each pay/redeem hook can then execute custom behavior based on the custom data (and funds) they receive.
 
-## Goerli
+## Mechanism
 
-```bash
-yarn deploy-goerli
-```
+A project using an NFT hook can specify any number of NFT tiers.
 
-## Mainnet
+- NFT tiers can be removed by the project owner as long as they are not locked.
+- NFT tiers can be added by the project owner as long as they respect the hook's `flags`. The flags specify if newly added tiers can have votes (voting units), if new tiers can have non-zero reserve frequencies, or if new tiers can allow on-demand minting by the project's owner.
 
-```bash
-yarn deploy-mainnet
-```
+Each tier has the following optional properties:
 
-The deployments are stored in ./broadcast
+- A price.
+- A supply (the maximum number of NFTs which can be minted from the tier).
+- A token URI (artwork and metadata), which can be overridden by a URI resolver. The URI resolver can return unique values for each NFT in the tier.
+- A category, so tiers can be organized and accessed for different purposes.
+- A reserve frequency (optional). With a reserve frequency of 5, an extra NFT will be minted to a pre-specified beneficiary address for every 5 NFTs purchased and minted from the tier.
+- A number of votes each NFT should represent on-chain (optional).
+- A flag to specify whether the NFTs in the tier can always be transferred, or if transfers can be paused depending on the project's ruleset.
+- A flag to specify whether the contract's owner can mint NFTs from the tier on-demand.
+- A set of flags which restrict tiers added in the future (the votes/reserved frequency/on-demand minting flags noted above).
 
-See the [Foundry Book for available options](https://book.getfoundry.sh/reference/forge/forge-create.html).
+Additional notes:
+
+- A payer can specify any number of tiers to mint as long as the total price does not exceed the amount being paid. If tiers aren't specified, their payment mints the most expensive tier possible, unless they specify that the hook should not mint any NFTs.
+- If the payment and a tier's price are specified in different currencies, the `JBPrices` contract is used to normalize the values.
+- If some of a payment does not go towards purchasing an NFT, those extra funds will be stored as "NFT credits" which can be used for future purchases. Optionally, the hook can disallow credits and reject payments with leftover funds.
+- If enabled by the project owner, holders can burn their NFTs to reclaim funds from the project. These redemptions are proportional to the NFTs price, relative to the combined price of all the NFTs.
+- NFT redemptions can be enabled by setting `useDataHookForRedeem` to `true` in the project's `JBRulesetMetadata`. If NFT redemptions are enabled, project token redemptions are disabled.
+- The hook's deployer can choose if the NFTs should support on-chain voting (as `ERC721Votes`). This increases the gas fees to interact with the NFTs, and should be disabled if not needed.
+
+## Architecture
+
+To use an NFT hook, a Juicebox project should be created by a `JBNFTHookProjectDeployer` instead of a `JBController`. The deployer will create a `JBNFTHook` (through an associated `JBNFTHookDeployer`) and add it to the project's first ruleset. New rulesets can be queued through the `JBNFTHookProjectDeployer` if the project's owner gives it the `QUEUE_RULESETS` permission (`JBPermissions` ID `2`).
+
+All `JBNFTHook`s store their data in the `JBNFTHookStore` contract.

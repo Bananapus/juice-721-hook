@@ -1,55 +1,65 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
-import { IJBDirectory } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBDirectory.sol";
-import { IJBProjects } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBProjects.sol";
-import { IJBOperatorStore } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBOperatorStore.sol";
+import {Votes} from "lib/openzeppelin-contracts/contracts/governance/utils/Votes.sol";
+import {EIP712} from "lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol";
+import {IJBDirectory} from "lib/juice-contracts-v4/src/interfaces/IJBDirectory.sol";
+import {IJBProjects} from "lib/juice-contracts-v4/src/interfaces/IJBProjects.sol";
+import {IJBPermissions} from "lib/juice-contracts-v4/src/interfaces/IJBPermissions.sol";
 
-import { Votes } from "./abstract/Votes.sol";
-import { JB721Tier } from "./structs/JB721Tier.sol";
-import { JBTiered721Delegate } from "./JBTiered721Delegate.sol";
+import {JB721Tier} from "./structs/JB721Tier.sol";
+import {JB721TiersHook} from "./JB721TiersHook.sol";
 
-/// @title JBTiered721GovernanceDelegate
-/// @notice A tiered 721 delegate where each NFT can be used for onchain governance.
-contract JBTiered721GovernanceDelegate is Votes, JBTiered721Delegate {
+/// @title JBGoverned721TiersHook
+/// @notice A 721 tiers hook where each NFT can be used for onchain governance.
+contract JBGoverned721TiersHook is Votes, JB721TiersHook {
     //*********************************************************************//
     // -------------------------- constructor ---------------------------- //
     //*********************************************************************//
 
-    /// @param _directory A directory of terminals and controllers for projects.
-    /// @param _operatorStore The operatorStore that will be used to check operator permissions.
-    /// @param _payMetadataDelegateId The 4bytes ID of this delegate, used for pay metadata parsing
-    /// @param _redeemMetadataDelegateId The 4bytes ID of this delegate, used for redeem metadata parsing
-    constructor(IJBDirectory _directory, IJBOperatorStore _operatorStore, bytes4 _payMetadataDelegateId, bytes4 _redeemMetadataDelegateId)
-        JBTiered721Delegate(_directory, _operatorStore, _payMetadataDelegateId, _redeemMetadataDelegateId)
+    /// @param directory A directory of terminals and controllers for projects.
+    /// @param permissions The operatorStore that will be used to check operator permissions.
+    constructor(
+        IJBDirectory directory,
+        IJBPermissions permissions
+    )
+        EIP712("Juicebox 721 Governance Hook", "1")
+        JB721TiersHook(directory, permissions)
     {}
 
     //*********************************************************************//
     // ------------------------ internal functions ----------------------- //
     //*********************************************************************//
 
-    /// @notice The total voting units the provided address has from its NFTs across all tiers. NFTs have a tier-specific number of voting units.
-    /// @param _account The account to get voting units for.
-    /// @return units The voting units for the account.
-    function _getVotingUnits(address _account) internal view virtual override returns (uint256 units) {
-        return store.votingUnitsOf(address(this), _account);
+    /// @notice The total number of votes that the specified address has from its NFTs (across all tiers).
+    /// @dev If an NFT's tier specifies a number of voting units, then that number of voting units is used. Otherwise,
+    /// the NFT's price is used.
+    /// @param account The address to get the voting units of.
+    /// @return units The number of voting units that the address has.
+    function _getVotingUnits(address account) internal view virtual override returns (uint256 units) {
+        return STORE.votingUnitsOf(address(this), account);
     }
 
-    /// @notice Handles voting unit accounting within a tier.
-    /// @param _from The account to transfer voting units from.
-    /// @param _to The account to transfer voting units to.
-    /// @param _tokenId The token ID for which voting units are being transferred.
-    /// @param _tier The tier that the token ID is part of.
-    function _afterTokenTransferAccounting(address _from, address _to, uint256 _tokenId, JB721Tier memory _tier)
+    /// @notice After an NFT is transferred, update the voting units of the sender and receiver accordingly.
+    /// @param from The address that the NFT was transferred from.
+    /// @param to The address that the NFT was transferred to.
+    /// @param tokenId The token ID of the NFT that was transferred.
+    /// @param tier The tier of the NFT that was transferred.
+    function _afterTokenTransferAccounting(
+        address from,
+        address to,
+        uint256 tokenId,
+        JB721Tier memory tier
+    )
         internal
         virtual
         override
     {
-        _tokenId; // Prevents unused var compiler and natspec complaints.
+        tokenId; // Prevents unused var compiler and natspec complaints.
 
-        if (_tier.votingUnits != 0) {
+        if (tier.votingUnits != 0) {
             // Transfer the voting units.
-            _transferVotingUnits(_from, _to, _tier.votingUnits);
+            _transferVotingUnits(from, to, tier.votingUnits);
         }
     }
 }

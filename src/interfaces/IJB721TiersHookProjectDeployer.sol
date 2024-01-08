@@ -1,40 +1,45 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { IJBDirectory } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBDirectory.sol";
-import { IJBProjects } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBProjects.sol";
-import { IJBController3_1 } from "@jbx-protocol/juice-contracts-v3/contracts/interfaces/IJBController3_1.sol";
-import { JBProjectMetadata } from "@jbx-protocol/juice-contracts-v3/contracts/structs/JBProjectMetadata.sol";
+import {IJBDirectory} from "lib/juice-contracts-v4/src/interfaces/IJBDirectory.sol";
+import {IJBProjects} from "lib/juice-contracts-v4/src/interfaces/IJBProjects.sol";
+import {IJBController} from "lib/juice-contracts-v4/src/interfaces/IJBController.sol";
 
-import { JBDeployTiered721DelegateData } from "../structs/JBDeployTiered721DelegateData.sol";
-import { JBLaunchProjectData } from "../structs/JBLaunchProjectData.sol";
-import { JBLaunchFundingCyclesData } from "../structs/JBLaunchFundingCyclesData.sol";
-import { JBReconfigureFundingCyclesData } from "../structs/JBReconfigureFundingCyclesData.sol";
-import { IJBTiered721DelegateDeployer } from "./IJBTiered721DelegateDeployer.sol";
+import {JBDeploy721TiersHookConfig} from "../structs/JBDeploy721TiersHookConfig.sol";
+import {JBLaunchProjectConfig} from "../structs/JBLaunchProjectConfig.sol";
+import {JBLaunchRulesetsConfig} from "../structs/JBLaunchRulesetsConfig.sol";
+import {JBQueueRulesetsConfig} from "../structs/JBQueueRulesetsConfig.sol";
+import {IJB721TiersHookDeployer} from "./IJB721TiersHookDeployer.sol";
 
-interface IJBTiered721DelegateProjectDeployer {
-    function directory() external view returns (IJBDirectory);
+interface IJB721TiersHookProjectDeployer {
+    function DIRECTORY() external view returns (IJBDirectory);
 
-    function delegateDeployer() external view returns (IJBTiered721DelegateDeployer);
+    function HOOK_DEPLOYER() external view returns (IJB721TiersHookDeployer);
 
     function launchProjectFor(
         address owner,
-        JBDeployTiered721DelegateData memory deployTiered721DelegateData,
-        JBLaunchProjectData memory launchProjectData,
-        IJBController3_1 controller
-    ) external returns (uint256 projectId);
+        JBDeploy721TiersHookConfig memory deployTiersHookConfig,
+        JBLaunchProjectConfig memory launchProjectConfig,
+        IJBController controller
+    )
+        external
+        returns (uint256 projectId);
 
-    function launchFundingCyclesFor(
+    function launchRulesetsFor(
         uint256 projectId,
-        JBDeployTiered721DelegateData memory deployTiered721DelegateData,
-        JBLaunchFundingCyclesData memory launchFundingCyclesData,
-        IJBController3_1 controller
-    ) external returns (uint256 configuration);
+        JBDeploy721TiersHookConfig memory deployTiersHookConfig,
+        JBLaunchRulesetsConfig memory launchRulesetsConfig,
+        IJBController controller
+    )
+        external
+        returns (uint256 rulesetId);
 
-    function reconfigureFundingCyclesOf(
+    function queueRulesetsOf(
         uint256 projectId,
-        JBDeployTiered721DelegateData memory deployTiered721DelegateData,
-        JBReconfigureFundingCyclesData memory reconfigureFundingCyclesData,
-        IJBController3_1 controller
-    ) external returns (uint256 configuration);
+        JBDeploy721TiersHookConfig memory deployTiersHookConfig,
+        JBQueueRulesetsConfig memory queueRulesetsConfig,
+        IJBController controller
+    )
+        external
+        returns (uint256 rulesetId);
 }

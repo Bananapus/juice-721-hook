@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/// @custom:member pauseTransfers A flag indicating if the token transfer functionality should be paused during the funding cycle.
-/// @custom:member pauseMintingReserves A flag indicating if voting unit expectations can change over time by adding new tiers with voting units.
-struct JBTiered721FundingCycleMetadata {
+/// @notice `JB721TiersHook` options which are packed and stored in the corresponding `JBRulesetMetadata.metadata` on a
+/// per-ruleset basis.
+/// @custom:member pauseTransfers A boolean indicating whether NFT transfers are paused during this ruleset.
+/// @custom:member pauseMintPendingReserves A boolean indicating whether pending/outstanding NFT reserves can be minted
+/// during this ruleset.
+struct JB721TiersRulesetMetadata {
     bool pauseTransfers;
-    bool pauseMintingReserves;
+    bool pauseMintPendingReserves;
 }

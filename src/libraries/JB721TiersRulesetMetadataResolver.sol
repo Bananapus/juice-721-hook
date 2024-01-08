@@ -1,41 +1,38 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity ^0.8.17;
 
-import { JBTiered721FundingCycleMetadata } from "./../structs/JBTiered721FundingCycleMetadata.sol";
+import {JB721TiersRulesetMetadata} from "./../structs/JB721TiersRulesetMetadata.sol";
 
-/// @title JBTiered721FundingCycleMetadataResolver
-/// @notice Utility library to parse and store tiered 721 funding cycle metadata.
-library JBTiered721FundingCycleMetadataResolver {
-    function transfersPaused(uint256 _data) internal pure returns (bool) {
-        return (_data & 1) == 1;
+/// @title JB721TiersRulesetMetadataResolver
+/// @notice Utility library to parse and store ruleset metadata associated for the tiered 721 hook.
+/// @dev This library parses the `metadata` member of the `JBRulesetMetadata` struct.
+library JB721TiersRulesetMetadataResolver {
+    function transfersPaused(uint256 data) internal pure returns (bool) {
+        return (data & 1) == 1;
     }
 
-    function mintingReservesPaused(uint256 _data) internal pure returns (bool) {
-        return ((_data >> 1) & 1) == 1;
+    function mintPendingReservesPaused(uint256 data) internal pure returns (bool) {
+        return ((data >> 1) & 1) == 1;
     }
 
-    /// @notice Pack the tiered 721 funding cycle metadata.
-    /// @param _metadata The metadata to validate and pack.
-    /// @return packed The packed uint256 of all tiered 721 metadata params.
-    function packTiered721FundingCycleMetadata(JBTiered721FundingCycleMetadata memory _metadata)
+    /// @notice Pack the ruleset metadata for the 721 hook into a single `uint256`.
+    /// @param metadata The metadata to validate and pack.
+    /// @return packed A `uint256` containing the packed metadata for the 721 hook.
+    function pack721TiersFundingCycleMetadata(JB721TiersRulesetMetadata memory metadata)
         internal
         pure
         returns (uint256 packed)
     {
         // pause transfers in bit 0.
-        if (_metadata.pauseTransfers) packed |= 1;
+        if (metadata.pauseTransfers) packed |= 1;
         // pause mint reserves in bit 2.
-        if (_metadata.pauseMintingReserves) packed |= 1 << 1;
+        if (metadata.pauseMintPendingReserves) packed |= 1 << 1;
     }
 
-    /// @notice Expand the tiered 721 funding cycle metadata.
-    /// @param _packedMetadata The packed metadata to expand.
-    /// @return metadata The tiered 721 metadata object.
-    function expandMetadata(uint8 _packedMetadata)
-        internal
-        pure
-        returns (JBTiered721FundingCycleMetadata memory metadata)
-    {
-        return JBTiered721FundingCycleMetadata(transfersPaused(_packedMetadata), mintingReservesPaused(_packedMetadata));
+    /// @notice Expand packed ruleset metadata for the 721 hook.
+    /// @param packedMetadata The packed metadata to expand.
+    /// @return metadata The metadata as a `JB721TiersRulesetMetadata` struct.
+    function expandMetadata(uint8 packedMetadata) internal pure returns (JB721TiersRulesetMetadata memory metadata) {
+        return JB721TiersRulesetMetadata(transfersPaused(packedMetadata), mintPendingReservesPaused(packedMetadata));
     }
 }

@@ -1,32 +1,31 @@
-pragma solidity ^0.8.16;
+pragma solidity 0.8.23;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@jbx-protocol/juice-delegates-registry/src/JBDelegatesRegistry.sol";
+import "lib/juice-address-registry/src/JBAddressRegistry.sol";
 
-import "../../JBTiered721Delegate.sol";
-import "../../JBTiered721DelegateProjectDeployer.sol";
-import "../../JBTiered721DelegateDeployer.sol";
-import "../../JBTiered721DelegateStore.sol";
+import "src/JB721TiersHook.sol";
+import "src/JB721TiersHookProjectDeployer.sol";
+import "src/JB721TiersHookDeployer.sol";
+import "src/JB721TiersHookStore.sol";
 
 import "../utils/TestBaseWorkflow.sol";
-import "../../interfaces/IJBTiered721Delegate.sol";
-import {JBDelegateMetadataHelper} from '@jbx-protocol/juice-delegate-metadata-lib/src/JBDelegateMetadataHelper.sol';
-
+import "src/interfaces/IJB721TiersHook.sol";
+import {MetadataResolverHelper} from "lib/juice-contracts-v4/test/helpers/MetadataResolverHelper.sol";
 
 contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
-    using JBFundingCycleMetadataResolver for JBFundingCycle;
+    using JBRulesetMetadataResolver for JBRuleset;
 
     address reserveBeneficiary = address(bytes20(keccak256("reserveBeneficiary")));
 
-    JBTiered721Delegate noGovernance;
+    JB721TiersHook noGovernance;
 
-    JBDelegateMetadataHelper metadataHelper;
+    MetadataResolverHelper metadataHelper;
 
     event Mint(
         uint256 indexed tokenId,
         uint256 indexed tierId,
         address indexed beneficiary,
-        uint256 totalAmountContributed,
+        uint256 totalAmountPaid,
         address caller
     );
     event Burn(uint256 indexed tokenId, address owner, address caller);
@@ -48,56 +47,43 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         bytes32(0x7D5A99F603F231D53A4F39D1521F98D2E8BB279CF29BEBFD0687DC98458E7F89),
         bytes32(0x7D5A99F603F231D53A4F39D1521F98D2E8BB279CF29BEBFD0687DC98458E7F89)
     ];
-    bytes4 payMetadataDelegateId = bytes4(hex'70');
-    bytes4 redeemMetadataDelegateId = bytes4(hex'71');
 
-    JBTiered721DelegateProjectDeployer deployer;
-    JBDelegatesRegistry delegatesRegistry;
+    JB721TiersHookProjectDeployer deployer;
+    JBAddressRegistry addressRegistry;
 
     function setUp() public override {
         super.setUp();
-        noGovernance = new JBTiered721Delegate(_jbDirectory, _jbOperatorStore, payMetadataDelegateId, redeemMetadataDelegateId);
-        JBTiered721GovernanceDelegate onchainGovernance = new JBTiered721GovernanceDelegate(
-      _jbDirectory,
-      _jbOperatorStore,
-      payMetadataDelegateId,
-      redeemMetadataDelegateId
-    );
-        delegatesRegistry = new JBDelegatesRegistry(IJBDelegatesRegistry(address(0)));
-        JBTiered721DelegateDeployer delegateDeployer = new JBTiered721DelegateDeployer(
-      onchainGovernance,
-      noGovernance,
-      delegatesRegistry
-    );
-        deployer = new JBTiered721DelegateProjectDeployer(
-      IJBDirectory(_jbDirectory),
-      delegateDeployer,
-      IJBOperatorStore(_jbOperatorStore)
-    );
+        noGovernance = new JB721TiersHook(jbDirectory, jbPermissions);
+        JBGoverned721TiersHook onchainGovernance = new JBGoverned721TiersHook(jbDirectory, jbPermissions);
+        addressRegistry = new JBAddressRegistry();
+        JB721TiersHookDeployer hookDeployer =
+            new JB721TiersHookDeployer(onchainGovernance, noGovernance, addressRegistry);
+        deployer =
+            new JB721TiersHookProjectDeployer(IJBDirectory(jbDirectory), hookDeployer, IJBPermissions(jbPermissions));
 
-    metadataHelper = new JBDelegateMetadataHelper();
+        metadataHelper = new MetadataResolverHelper();
     }
 
     function testDeployLaunchProjectAndAddToRegistry() external {
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
         // Check: first project has the id 1?
         assertEq(projectId, 1);
-        // Check: delegate added to registry?
-        address _delegate = _jbFundingCycleStore.currentOf(projectId).dataSource();
-        assertEq(delegatesRegistry.deployerOf(_delegate), address(deployer.delegateDeployer()));
+        // Check: hook added to registry?
+        address _hook = jbRulesets.currentOf(projectId).dataHook();
+        assertEq(addressRegistry.deployerOf(_hook), address(deployer.HOOK_DEPLOYER()));
     }
 
     function testMintOnPayIfOneTierIsPassed(uint256 valueSent) external {
         valueSent = bound(valueSent, 10, 2000);
         // Highest possible tier is 10
         uint256 highestTier = valueSent <= 100 ? (valueSent / 10) : 10;
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
         // Craft the metadata: claim from the highest tier
         uint16[] memory rawMetadata = new uint16[](1);
         rawMetadata[0] = uint16(highestTier);
@@ -106,65 +92,61 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         bytes[] memory _data = new bytes[](1);
         _data[0] = abi.encode(true, rawMetadata);
 
-        // Pass the delegate id
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
+
+        // Pass the hook id
         bytes4[] memory _ids = new bytes4[](1);
-        _ids[0] = payMetadataDelegateId;
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        bytes memory _delegateMetadata =  metadataHelper.createMetadata(_ids, _data);
+        bytes memory _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
         // Check: correct tier and id?
         vm.expectEmit(true, true, true, true);
         emit Mint(
             _generateTokenId(highestTier, 1),
             highestTier,
-            _beneficiary,
+            beneficiary,
             valueSent,
-            address(_jbETHPaymentTerminal) // msg.sender
+            address(jbMultiTerminal) // msg.sender
         );
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: valueSent}(
-            projectId,
-            100,
-            address(0),
-            _beneficiary,
-            /* _minReturnedTokens */
-            0,
-            /* _preferClaimedTokens */
-            false,
-            /* _memo */
-            "Take my money!",
-            /* _delegateMetadata */
-            _delegateMetadata
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: valueSent}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
         uint256 tokenId = _generateTokenId(highestTier, 1);
         // Check: NFT actually received?
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
         if (valueSent < 10) {
-            assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 0);
+            assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 0);
         } else {
-            assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 1);
+            assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 1);
         }
         // Second minted with leftover (if > lowest tier)?
-        assertEq(IERC721(NFTRewardDataSource).ownerOf(tokenId), _beneficiary);
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).firstOwnerOf(tokenId), _beneficiary);
+        assertEq(IERC721(NFTRewardDataHook).ownerOf(tokenId), beneficiary);
+        assertEq(IJB721TiersHook(NFTRewardDataHook).firstOwnerOf(tokenId), beneficiary);
         // Check: firstOwnerOf and ownerOf are correct after a transfer?
-        vm.prank(_beneficiary);
-        IERC721(NFTRewardDataSource).transferFrom(_beneficiary, address(696969420), tokenId);
-        assertEq(IERC721(NFTRewardDataSource).ownerOf(tokenId), address(696969420));
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).firstOwnerOf(tokenId), _beneficiary);
+        vm.prank(beneficiary);
+        IERC721(NFTRewardDataHook).transferFrom(beneficiary, address(696_969_420), tokenId);
+        assertEq(IERC721(NFTRewardDataHook).ownerOf(tokenId), address(696_969_420));
+        assertEq(IJB721TiersHook(NFTRewardDataHook).firstOwnerOf(tokenId), beneficiary);
         // Check: same after a second transfer - 0xSTVG-style testing?
-        vm.prank(address(696969420));
-        IERC721(NFTRewardDataSource).transferFrom(address(696969420), address(123456789), tokenId);
-        assertEq(IERC721(NFTRewardDataSource).ownerOf(tokenId), address(123456789));
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).firstOwnerOf(tokenId), _beneficiary);
+        vm.prank(address(696_969_420));
+        IERC721(NFTRewardDataHook).transferFrom(address(696_969_420), address(123_456_789), tokenId);
+        assertEq(IERC721(NFTRewardDataHook).ownerOf(tokenId), address(123_456_789));
+        assertEq(IJB721TiersHook(NFTRewardDataHook).firstOwnerOf(tokenId), beneficiary);
     }
 
     function testMintOnPayIfMultipleTiersArePassed() external {
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
         // 5 first tier floors
         uint256 _amountNeeded = 50 + 40 + 30 + 20 + 10;
         uint16[] memory rawMetadata = new uint16[](5);
@@ -176,9 +158,9 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
             emit Mint(
                 _generateTokenId(i + 1, 1),
                 i + 1,
-                _beneficiary,
+                beneficiary,
                 _amountNeeded,
-                address(_jbETHPaymentTerminal) // msg.sender
+                address(jbMultiTerminal) // msg.sender
             );
         }
 
@@ -186,124 +168,107 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         bytes[] memory _data = new bytes[](1);
         _data[0] = abi.encode(true, rawMetadata);
 
-        // Pass the delegate id
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
+
+        // Pass the hook id
         bytes4[] memory _ids = new bytes4[](1);
-        _ids[0] = payMetadataDelegateId;
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        bytes memory _delegateMetadata = metadataHelper.createMetadata(_ids, _data);
+        bytes memory _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: _amountNeeded}(
-            projectId,
-            _amountNeeded,
-            address(0),
-            _beneficiary,
-            /* _minReturnedTokens */
-            0,
-            /* _preferClaimedTokens */
-            false,
-            /* _memo */
-            "Take my money!",
-            /* _delegateMetadata */
-            _delegateMetadata
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: _amountNeeded}({
+            projectId: projectId,
+            amount: _amountNeeded,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
 
         // Check: NFT actually received?
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 5);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 5);
         for (uint256 i = 1; i <= 5; i++) {
             uint256 tokenId = _generateTokenId(i, 1);
-            assertEq(IJBTiered721Delegate(NFTRewardDataSource).firstOwnerOf(tokenId), _beneficiary);
+            assertEq(IJB721TiersHook(NFTRewardDataHook).firstOwnerOf(tokenId), beneficiary);
             // Check: firstOwnerOf and ownerOf are correct after a transfer?
-            vm.prank(_beneficiary);
-            IERC721(NFTRewardDataSource).transferFrom(_beneficiary, address(696969420), tokenId);
-            assertEq(IERC721(NFTRewardDataSource).ownerOf(tokenId), address(696969420));
-            assertEq(IJBTiered721Delegate(NFTRewardDataSource).firstOwnerOf(tokenId), _beneficiary);
+            vm.prank(beneficiary);
+            IERC721(NFTRewardDataHook).transferFrom(beneficiary, address(696_969_420), tokenId);
+            assertEq(IERC721(NFTRewardDataHook).ownerOf(tokenId), address(696_969_420));
+            assertEq(IJB721TiersHook(NFTRewardDataHook).firstOwnerOf(tokenId), beneficiary);
         }
     }
 
     function testNoMintOnPayWhenNotIncludingTierIds(uint256 valueSent) external {
         valueSent = bound(valueSent, 10, 2000);
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
         bool _allowOverspending = true;
         uint16[] memory rawMetadata = new uint16[](0);
         bytes memory metadata =
-            abi.encode(bytes32(0), bytes32(0), type(IJBTiered721Delegate).interfaceId, _allowOverspending, rawMetadata);
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: valueSent}(
-            projectId,
-            100,
-            address(0),
-            _beneficiary,
-            /* _minReturnedTokens */
-            0,
-            /* _preferClaimedTokens */
-            false,
-            /* _memo */
-            "Take my money!",
-            /* _delegateMetadata */
-            metadata
-        );
+            abi.encode(bytes32(0), bytes32(0), type(IJB721TiersHook).interfaceId, _allowOverspending, rawMetadata);
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: valueSent}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: metadata
+        });
         // Check: No NFT was minted
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 0);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 0);
         // Check: User Received the credits
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).creditsOf(_beneficiary), valueSent);
+        assertEq(IJB721TiersHook(NFTRewardDataHook).payCreditsOf(beneficiary), valueSent);
     }
 
     function testNoMintOnPayWhenNotIncludingMetadata(uint256 valueSent) external {
         valueSent = bound(valueSent, 10, 2000);
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
 
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: valueSent}(
-            projectId,
-            100,
-            address(0),
-            _beneficiary,
-            /* _minReturnedTokens */
-            0,
-            /* _preferClaimedTokens */
-            false,
-            /* _memo */
-            "Take my money!",
-            /* _delegateMetadata */
-            new bytes(0)
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: valueSent}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: new bytes(0)
+        });
         // Check: No NFT was minted
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 0);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 0);
         // Check: User Received the credits
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).creditsOf(_beneficiary), valueSent);
+        assertEq(IJB721TiersHook(NFTRewardDataHook).payCreditsOf(beneficiary), valueSent);
     }
 
     // TODO This needs care (fuzz fails with insuf reserve for val=10)
-    function testMintReservedToken() external {
+    function testMintReservedNft() external {
         uint16 valueSent = 1500;
         uint256 highestTier = valueSent <= 100 ? (valueSent / 10) : 10;
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
         // Check: 0 reserved token before any mint from a contribution?
         assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-                NFTRewardDataSource, highestTier
-            ),
-            0
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, highestTier), 0
         );
         // Check: cannot mint 0 reserved token?
-        vm.expectRevert(abi.encodeWithSelector(JBTiered721DelegateStore.INSUFFICIENT_RESERVES.selector));
-        vm.prank(_projectOwner);
-        IJBTiered721Delegate(NFTRewardDataSource).mintReservesFor(highestTier, 1);
+        vm.expectRevert(abi.encodeWithSelector(JB721TiersHookStore.INSUFFICIENT_PENDING_RESERVES.selector));
+        vm.prank(projectOwner);
+        IJB721TiersHook(NFTRewardDataHook).mintPendingReservesFor(highestTier, 1);
         uint16[] memory rawMetadata = new uint16[](1);
         rawMetadata[0] = uint16(highestTier); // reward tier
 
@@ -311,70 +276,59 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         bytes[] memory _data = new bytes[](1);
         _data[0] = abi.encode(true, rawMetadata);
 
-        // Pass the delegate id
+        // Pass the hook id
         bytes4[] memory _ids = new bytes4[](1);
-        _ids[0] = payMetadataDelegateId;
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        bytes memory _delegateMetadata = metadataHelper.createMetadata(_ids, _data);
+        bytes memory _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
         // Check: correct tier and id?
         vm.expectEmit(true, true, true, true);
         emit Mint(
             _generateTokenId(highestTier, 1), // First one
             highestTier,
-            _beneficiary,
+            beneficiary,
             valueSent,
-            address(_jbETHPaymentTerminal) // msg.sender
+            address(jbMultiTerminal) // msg.sender
         );
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: valueSent}(
-            projectId,
-            100,
-            address(0),
-            _beneficiary,
-            /* _minReturnedTokens */
-            0,
-            /* _preferClaimedTokens */
-            false,
-            /* _memo */
-            "Take my money!",
-            /* _delegateMetadata */
-            _delegateMetadata
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: valueSent}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
         // Check: new reserved one (1 minted == 1 reserved, due to rounding up)
         assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-                NFTRewardDataSource, highestTier
-            ),
-            1
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, highestTier), 1
         );
 
         JB721Tier memory _tierBeforeMintingReserves =
-            JBTiered721Delegate(NFTRewardDataSource).store().tierOf(NFTRewardDataSource, highestTier, false);
+            JB721TiersHook(NFTRewardDataHook).STORE().tierOf(NFTRewardDataHook, highestTier, false);
 
         // Mint the reserved token
-        vm.prank(_projectOwner);
-        IJBTiered721Delegate(NFTRewardDataSource).mintReservesFor(highestTier, 1);
+        vm.prank(projectOwner);
+        IJB721TiersHook(NFTRewardDataHook).mintPendingReservesFor(highestTier, 1);
         // Check: NFT received?
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(reserveBeneficiary), 1);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(reserveBeneficiary), 1);
 
         JB721Tier memory _tierAfterMintingReserves =
-            JBTiered721Delegate(NFTRewardDataSource).store().tierOf(NFTRewardDataSource, highestTier, false);
+            JB721TiersHook(NFTRewardDataHook).STORE().tierOf(NFTRewardDataHook, highestTier, false);
         // the remaining tiers should reduce
-        assertLt(_tierAfterMintingReserves.remainingQuantity, _tierBeforeMintingReserves.remainingQuantity);
+        assertLt(_tierAfterMintingReserves.remainingSupply, _tierBeforeMintingReserves.remainingSupply);
 
         // Check: no more reserved token to mint?
         assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-                NFTRewardDataSource, highestTier
-            ),
-            0
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, highestTier), 0
         );
         // Check: cannot mint more reserved token?
-        vm.expectRevert(abi.encodeWithSelector(JBTiered721DelegateStore.INSUFFICIENT_RESERVES.selector));
-        vm.prank(_projectOwner);
-        IJBTiered721Delegate(NFTRewardDataSource).mintReservesFor(highestTier, 1);
+        vm.expectRevert(abi.encodeWithSelector(JB721TiersHookStore.INSUFFICIENT_PENDING_RESERVES.selector));
+        vm.prank(projectOwner);
+        IJB721TiersHook(NFTRewardDataHook).mintPendingReservesFor(highestTier, 1);
     }
 
     // Will:
@@ -386,94 +340,89 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         valueSent = bound(valueSent, 10, 2000);
         // Highest possible tier is 10
         uint256 highestTier = valueSent <= 100 ? (valueSent / 10) : 10;
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
         // Craft the metadata: claim from the highest tier
-        bytes memory _delegateMetadata;
+        bytes memory _hookMetadata;
         bytes[] memory _data;
         bytes4[] memory _ids;
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
         {
             uint16[] memory rawMetadata = new uint16[](1);
             rawMetadata[0] = uint16(highestTier);
-            
+
             // Build the metadata with the tiers to mint and the overspending flag
             _data = new bytes[](1);
             _data[0] = abi.encode(true, rawMetadata);
 
-            // Pass the delegate id
+            // Pass the hook id
             _ids = new bytes4[](1);
-            _ids[0] = payMetadataDelegateId;
+            _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
             // Generate the metadata
-            _delegateMetadata = metadataHelper.createMetadata(_ids, _data);
+            _hookMetadata = metadataHelper.createMetadata(_ids, _data);
         }
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: valueSent}(
-            projectId,
-            100, // _amount
-            address(0), // _token
-            _beneficiary,
-            0, // _minReturnedTokens
-            false, //_preferClaimedTokens
-            "Take my money!", // _memo
-            _delegateMetadata //_delegateMetadata
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: valueSent}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
+
 
         {
-        uint256 tokenId = _generateTokenId(highestTier, 1);
+            uint256 tokenId = _generateTokenId(highestTier, 1);
 
-        // Craft the metadata: redeem the tokenId
-        uint256[] memory redemptionId = new uint256[](1);
-        redemptionId[0] = tokenId;
+            // Craft the metadata: redeem the tokenId
+            uint256[] memory redemptionId = new uint256[](1);
+            redemptionId[0] = tokenId;
 
-        // Build the metadata with the tiers to redeem
-        _data[0] = abi.encode(redemptionId);
+            // Build the metadata with the tiers to redeem
+            _data[0] = abi.encode(redemptionId);
 
-        // Pass the delegate id
-        _ids[0] = redeemMetadataDelegateId;
+            // Pass the hook id
+            _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
-        // Generate the metadata
-        _delegateMetadata = metadataHelper.createMetadata(_ids, _data);
+            // Generate the metadata
+            _hookMetadata = metadataHelper.createMetadata(_ids, _data);
         }
 
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
         // New token balance
-        uint256 tokenBalance = IERC721(NFTRewardDataSource).balanceOf(_beneficiary);
-        
-        vm.prank(_beneficiary);
-        _jbETHPaymentTerminal.redeemTokensOf({
-            _holder: _beneficiary,
-            _projectId: projectId,
-            _tokenCount: 0,
-            _token: address(0),
-            _minReturnedTokens: 0,
-            _beneficiary: payable(_beneficiary),
-            _memo: "imma out of here",
-            _metadata: _delegateMetadata
+        uint256 tokenBalance = IERC721(NFTRewardDataHook).balanceOf(beneficiary);
+
+        vm.prank(beneficiary);
+        jbMultiTerminal.redeemTokensOf({
+            holder: beneficiary,
+            projectId: projectId,
+            tokenToReclaim: JBConstants.NATIVE_TOKEN,
+            redeemCount: 0,
+            minTokensReclaimed: 0,
+            beneficiary: payable(beneficiary),
+            metadata: _hookMetadata
         });
         // Check: NFT actually redeemed?
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), tokenBalance - 1);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), tokenBalance - 1);
         // Check: Burn accounted?
-        assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfBurnedFor(NFTRewardDataSource, highestTier), 1
-        );
-        // Calculate if we are rounding up or not. Used to verify 'numberOfReservedTokensOutstandingFor'
+        assertEq(IJB721TiersHook(NFTRewardDataHook).STORE().numberOfBurnedFor(NFTRewardDataHook, highestTier), 1);
+        // Calculate if we are rounding up or not. Used to verify 'numberOfPendingReservesFor'
         uint256 _rounding;
         {
             JB721Tier memory _tier =
-                IJBTiered721Delegate(NFTRewardDataSource).store().tierOf(NFTRewardDataSource, highestTier, false);
+                IJB721TiersHook(NFTRewardDataHook).STORE().tierOf(NFTRewardDataHook, highestTier, false);
             // '_reserveTokensMinted' is always 0 here
-            uint256 _numberOfNonReservesMinted = _tier.initialQuantity - _tier.remainingQuantity;
-            _rounding = _numberOfNonReservesMinted % _tier.reservedRate > 0 ? 1 : 0;
+            uint256 _numberOfNonReservesMinted = _tier.initialSupply - _tier.remainingSupply;
+            _rounding = _numberOfNonReservesMinted % _tier.reserveFrequency > 0 ? 1 : 0;
         }
         // Check: Reserved left to mint is ?
         assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-                NFTRewardDataSource, highestTier
-            ),
-            (tokenBalance / tiered721DeployerData.pricing.tiers[highestTier - 1].reservedRate + _rounding)
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, highestTier),
+            (tokenBalance / tiered721DeployerData.tiersConfig.tiers[highestTier - 1].reserveFrequency + _rounding)
         );
     }
 
@@ -482,12 +431,12 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
     // - check the remaining supply within the corresponding tier (highest tier == 10, reserved rate is maximum -> 5)
     // - burn all the corresponding token from that tier
     function testRedeemAll() external {
-        (JBDeployTiered721DelegateData memory tiered721DeployerData, JBLaunchProjectData memory launchProjectData) =
+        (JBDeploy721TiersHookConfig memory tiered721DeployerData, JBLaunchProjectConfig memory launchProjectConfig) =
             createData();
         uint256 tier = 10;
-        uint256 floor = tiered721DeployerData.pricing.tiers[tier - 1].price;
+        uint256 floor = tiered721DeployerData.tiersConfig.tiers[tier - 1].price;
         uint256 projectId =
-            deployer.launchProjectFor(_projectOwner, tiered721DeployerData, launchProjectData, _jbController);
+            deployer.launchProjectFor(projectOwner, tiered721DeployerData, launchProjectConfig, jbController);
         // Craft the metadata: claim 5 from the tier
         uint16[] memory rawMetadata = new uint16[](5);
         for (uint256 i; i < rawMetadata.length; i++) {
@@ -498,33 +447,37 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         bytes[] memory _data = new bytes[](1);
         _data[0] = abi.encode(true, rawMetadata);
 
-        // Pass the delegate id
+        address NFTRewardDataHook = jbRulesets.currentOf(projectId).dataHook();
+
+        // Pass the hook id
         bytes4[] memory _ids = new bytes4[](1);
-        _ids[0] = payMetadataDelegateId;
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        bytes memory _delegateMetadata =  metadataHelper.createMetadata(_ids, _data);
+        bytes memory _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: floor * rawMetadata.length}(
-            projectId,
-            100, // _amount
-            address(0), // _token
-            _beneficiary,
-            0, // _minReturnedTokens
-            false, //_preferClaimedTokens
-            "Take my money!", // _memo
-            _delegateMetadata //_delegateMetadata
-        );
-        address NFTRewardDataSource = _jbFundingCycleStore.currentOf(projectId).dataSource();
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: floor * rawMetadata.length}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
+
         // New token balance
-        uint256 tokenBalance = IERC721(NFTRewardDataSource).balanceOf(_beneficiary);
+        uint256 tokenBalance = IERC721(NFTRewardDataHook).balanceOf(beneficiary);
         // Reserved token available to mint
-        uint256 reservedOutstanding = IJBTiered721Delegate(NFTRewardDataSource).store()
-            .numberOfReservedTokensOutstandingFor(NFTRewardDataSource, tier);
-        // Check: token minted and outstanding reserved balances are correct (+1 as we're rounding up for non-null values)
+        uint256 reservedOutstanding =
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, tier);
+        // Check: token minted and outstanding reserved balances are correct (+1 as we're rounding up for non-null
+        // values)
         assertEq(rawMetadata.length, tokenBalance);
-        assertEq(reservedOutstanding, (tokenBalance / tiered721DeployerData.pricing.tiers[tier - 1].reservedRate) + 1);
+        assertEq(
+            reservedOutstanding, (tokenBalance / tiered721DeployerData.tiersConfig.tiers[tier - 1].reserveFrequency) + 1
+        );
         // Craft the metadata to redeem the tokenId's
         uint256[] memory redemptionId = new uint256[](5);
         for (uint256 i; i < rawMetadata.length; i++) {
@@ -535,65 +488,61 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
         // Build the metadata with the tiers to redeem
         _data[0] = abi.encode(redemptionId);
 
-        // Pass the delegate id
-        _ids[0] = redeemMetadataDelegateId;
+        // Pass the hook id
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        _delegateMetadata = metadataHelper.createMetadata(_ids, _data);
+        _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
-        vm.prank(_beneficiary);
-        _jbETHPaymentTerminal.redeemTokensOf({
-            _holder: _beneficiary,
-            _projectId: projectId,
-            _tokenCount: 0,
-            _token: address(0),
-            _minReturnedTokens: 0,
-            _beneficiary: payable(_beneficiary),
-            _memo: "imma out of here",
-            _metadata: _delegateMetadata
+        vm.prank(beneficiary);
+        jbMultiTerminal.redeemTokensOf({
+            holder: beneficiary,
+            projectId: projectId,
+            tokenToReclaim: JBConstants.NATIVE_TOKEN,
+            redeemCount: 0,
+            minTokensReclaimed: 0,
+            beneficiary: payable(beneficiary),
+            metadata: _hookMetadata
         });
         // Check: NFT actually redeemed?
-        assertEq(IERC721(NFTRewardDataSource).balanceOf(_beneficiary), 0);
+        assertEq(IERC721(NFTRewardDataHook).balanceOf(beneficiary), 0);
         // Check: Burn accounted?
-        assertEq(IJBTiered721Delegate(NFTRewardDataSource).store().numberOfBurnedFor(NFTRewardDataSource, tier), 5);
+        assertEq(IJB721TiersHook(NFTRewardDataHook).STORE().numberOfBurnedFor(NFTRewardDataHook, tier), 5);
         // Check: Reserved left to mint is back to 0
-        assertEq(
-            IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-                NFTRewardDataSource, tier
-            ),
-            0
-        );
+        assertEq(IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, tier), 0);
 
         // Build the metadata with the tiers to mint and the overspending flag
         _data[0] = abi.encode(true, rawMetadata);
 
-        // Pass the delegate id
-        _ids[0] = payMetadataDelegateId;
+        // Pass the hook id
+        _ids[0] = bytes4(bytes20(address(NFTRewardDataHook)));
 
         // Generate the metadata
-        _delegateMetadata =  metadataHelper.createMetadata(_ids, _data);
+        _hookMetadata = metadataHelper.createMetadata(_ids, _data);
 
         // Check: Can mint again the token previously burned
-        vm.prank(_caller);
-        _jbETHPaymentTerminal.pay{value: floor * rawMetadata.length}(
-            projectId,
-            100, // _amount
-            address(0), // _token
-            _beneficiary,
-            0, // _minReturnedTokens
-            false, //_preferClaimedTokens
-            "Take my money!", // _memo
-            _delegateMetadata //_delegateMetadata
-        );
+        vm.prank(caller);
+        jbMultiTerminal.pay{value: floor * rawMetadata.length}({
+            projectId: projectId,
+            amount: 100,
+            token: JBConstants.NATIVE_TOKEN,
+            beneficiary: beneficiary,
+            minReturnedTokens: 0,
+            memo: "Take my money!",
+            metadata: _hookMetadata
+        });
+
         // New token balance
-        tokenBalance = IERC721(NFTRewardDataSource).balanceOf(_beneficiary);
+        tokenBalance = IERC721(NFTRewardDataHook).balanceOf(beneficiary);
         // Reserved token available to mint is back at prev value too
-        reservedOutstanding = IJBTiered721Delegate(NFTRewardDataSource).store().numberOfReservedTokensOutstandingFor(
-            NFTRewardDataSource, tier
-        );
-        // Check: token minted and outstanding reserved balances are correct (+1 as we're rounding up for non-null values)
+        reservedOutstanding =
+            IJB721TiersHook(NFTRewardDataHook).STORE().numberOfPendingReservesFor(NFTRewardDataHook, tier);
+        // Check: token minted and outstanding reserved balances are correct (+1 as we're rounding up for non-null
+        // values)
         assertEq(rawMetadata.length, tokenBalance);
-        assertEq(reservedOutstanding, (tokenBalance / tiered721DeployerData.pricing.tiers[tier - 1].reservedRate) + 1);
+        assertEq(
+            reservedOutstanding, (tokenBalance / tiered721DeployerData.tiersConfig.tiers[tier - 1].reserveFrequency) + 1
+        );
     }
 
     // ----- internal helpers ------
@@ -601,52 +550,85 @@ contract TestJBTieredNFTRewardDelegateE2E is TestBaseWorkflow {
     function createData()
         internal
         returns (
-            JBDeployTiered721DelegateData memory tiered721DeployerData,
-            JBLaunchProjectData memory launchProjectData
+            JBDeploy721TiersHookConfig memory tiered721DeployerData,
+            JBLaunchProjectConfig memory launchProjectConfig
         )
     {
-        JB721TierParams[] memory tierParams = new JB721TierParams[](10);
+        JB721TierConfig[] memory tierParams = new JB721TierConfig[](10);
         for (uint256 i; i < 10; i++) {
-            tierParams[i] = JB721TierParams({
+            tierParams[i] = JB721TierConfig({
                 price: uint104((i + 1) * 10),
-                initialQuantity: uint32(10),
+                initialSupply: uint32(10),
                 votingUnits: uint32((i + 1) * 10),
-                reservedRate: 10,
-                reservedTokenBeneficiary: reserveBeneficiary,
+                reserveFrequency: 10,
+                reserveBeneficiary: reserveBeneficiary,
                 encodedIPFSUri: tokenUris[i],
                 category: uint24(100),
-                allowManualMint: false,
-                shouldUseReservedTokenBeneficiaryAsDefault: false,
+                allowOwnerMint: false,
+                useReserveBeneficiaryAsDefault: false,
                 transfersPausable: false,
                 useVotingUnits: false
             });
         }
-        tiered721DeployerData = JBDeployTiered721DelegateData({
+        tiered721DeployerData = JBDeploy721TiersHookConfig({
             name: name,
             symbol: symbol,
-            fundingCycleStore: _jbFundingCycleStore,
+            rulesets: jbRulesets,
             baseUri: baseUri,
             tokenUriResolver: IJB721TokenUriResolver(address(0)),
             contractUri: contractUri,
-            pricing: JB721PricingParams({tiers: tierParams, currency: 1, decimals: 18, prices: IJBPrices(address(0))}),
-            reservedTokenBeneficiary: reserveBeneficiary,
-            store: new JBTiered721DelegateStore(),
-            flags: JBTiered721Flags({
+            tiersConfig: JB721InitTiersConfig({
+                tiers: tierParams,
+                currency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+                decimals: 18,
+                prices: IJBPrices(address(0))
+            }),
+            reserveBeneficiary: reserveBeneficiary,
+            store: new JB721TiersHookStore(),
+            flags: JB721TiersHookFlags({
                 preventOverspending: false,
-                lockReservedTokenChanges: false,
-                lockVotingUnitChanges: false,
-                lockManualMintingChanges: true
+                noNewTiersWithReserves: false,
+                noNewTiersWithVotes: false,
+                noNewTiersWithOwnerMinting: true
             }),
             governanceType: JB721GovernanceType.NONE
         });
-        launchProjectData = JBLaunchProjectData({
-            projectMetadata: _projectMetadata,
-            data: _data,
-            metadata: _metadata,
-            mustStartAtOrAfter: 0,
-            groupedSplits: _groupedSplits,
-            fundAccessConstraints: _fundAccessConstraints,
-            terminals: _terminals,
+
+        JBPayDataHookRulesetMetadata memory _metadata = JBPayDataHookRulesetMetadata({
+            reservedRate: 5000, //50%
+            redemptionRate: 5000, //50%
+            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: true,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowControllerMigration: false,
+            allowSetController: false,
+            holdFees: false,
+            useTotalSurplusForRedemptions: false,
+            useDataHookForRedeem: true,
+            metadata: 0x00
+        });
+
+        JBPayDataHookRulesetConfig[] memory _rulesetConfigurations = new JBPayDataHookRulesetConfig[](1);
+        // Package up the ruleset configuration.
+        _rulesetConfigurations[0].mustStartAtOrAfter = 0;
+        _rulesetConfigurations[0].duration = 14;
+        _rulesetConfigurations[0].weight = 1000 * 10 ** 18;
+        _rulesetConfigurations[0].decayRate = 450_000_000;
+        _rulesetConfigurations[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        _rulesetConfigurations[0].metadata = _metadata;
+
+        JBTerminalConfig[] memory _terminalConfigurations = new JBTerminalConfig[](1);
+        address[] memory _tokensToAccept = new address[](1);
+        _tokensToAccept[0] = JBConstants.NATIVE_TOKEN;
+        _terminalConfigurations[0] = JBTerminalConfig({terminal: jbMultiTerminal, tokensToAccept: _tokensToAccept});
+
+        launchProjectConfig = JBLaunchProjectConfig({
+            projectMetadata: projectMetadata,
+            rulesetConfigurations: _rulesetConfigurations,
+            terminalConfigurations: _terminalConfigurations,
             memo: ""
         });
     }
